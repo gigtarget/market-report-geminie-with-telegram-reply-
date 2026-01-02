@@ -3,6 +3,7 @@ import { callGemini } from '../gemini.js';
 import { formatMarkdown } from '../format.js';
 import { InputSchema } from '../schemas.js';
 import { sendTelegramMessage, setCachedInput } from '../bot.js';
+import { config } from '../config.js';
 
 export async function generateRoute(app: FastifyInstance): Promise<void> {
   app.post('/generate', {
@@ -19,6 +20,11 @@ export async function generateRoute(app: FastifyInstance): Promise<void> {
       const parsed = InputSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.status(400).send({ error: 'Invalid input', details: parsed.error.format() });
+      }
+
+      if (!config.geminiApiKey) {
+        request.log.error('GEMINI_API_KEY is not configured');
+        return reply.status(500).send({ error: 'GEMINI_API_KEY is not configured' });
       }
 
       const input = parsed.data;
