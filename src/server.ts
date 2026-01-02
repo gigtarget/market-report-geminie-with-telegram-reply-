@@ -6,9 +6,21 @@ import { initBot } from './bot.js';
 
 const app = Fastify({ logger: loggerOptions });
 
-app.register(rateLimit, {
-  global: false,
-});
+// @fastify/rate-limit v10 requires Fastify v5+. On environments still pinned to
+// Fastify v4 (like the current Railway deploy), registering the plugin throws a
+// version mismatch error and crashes the process after a few seconds. Detect
+// the Fastify major version and skip the plugin when incompatible so the
+// service keeps running instead of exiting.
+const fastifyMajor = Number.parseInt(app.version.split('.')[0] ?? '0', 10);
+
+if (fastifyMajor >= 5) {
+  app.register(rateLimit, { global: false });
+} else {
+  app.log.warn(
+    { fastifyVersion: app.version },
+    'Skipping @fastify/rate-limit: requires Fastify v5+',
+  );
+}
 
 app.get('/health', async () => ({ ok: true }));
 
