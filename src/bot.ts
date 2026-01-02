@@ -1,5 +1,6 @@
 import { Bot, Context } from 'grammy';
 import { run, RunnerHandle } from '@grammyjs/runner';
+import { readFile } from 'fs/promises';
 import { config, logger } from './config.js';
 import { InputData, InputSchema } from './schemas.js';
 import { callGemini } from './gemini.js';
@@ -14,6 +15,13 @@ export function getCachedInput(): InputData | null {
 
 export function setCachedInput(data: InputData): void {
   cachedInput = data;
+}
+
+async function loadDefaultInput(): Promise<InputData> {
+  const fileUrl = new URL('../sample-input.json', import.meta.url);
+  const raw = await readFile(fileUrl, 'utf-8');
+  const parsed = JSON.parse(raw);
+  return InputSchema.parse(parsed);
 }
 
 async function handleSetInput(ctx: Context) {
@@ -71,33 +79,41 @@ async function handleReportPayload(ctx: Context, payloadText: string) {
   }
 
   const trimmed = payloadText.trim();
-  const usingCached = !trimmed;
-
-  if (usingCached && !cachedInput) {
-    await ctx.reply('No cached input found. Send /setinput <json> first or include JSON with /report <json>.');
-    return;
-  }
-
   let progressMessageId: number | null = null;
+  let sourceDescription = '';
 
   try {
-    if (usingCached) {
-      const progress = await ctx.reply('Using cached input. Contacting Gemini...');
-      progressMessageId = progress.message_id;
-    } else {
+    if (trimmed) {
       const progress = await ctx.reply('Validating payload...');
       progressMessageId = progress.message_id;
 
       const parsed = JSON.parse(trimmed);
       const validated = InputSchema.parse(parsed);
       setCachedInput(validated);
+      sourceDescription = 'provided payload';
       await ctx.api.editMessageText(ctx.chat.id, progressMessageId, 'Payload validated. Contacting Gemini...');
+    } else if (cachedInput) {
+      const progress = await ctx.reply('Using cached input. Contacting Gemini...');
+      progressMessageId = progress.message_id;
+      sourceDescription = 'cached input';
+    } else {
+      const progress = await ctx.reply('No payload provided. Loading sample input...');
+      progressMessageId = progress.message_id;
+
+      const defaultInput = await loadDefaultInput();
+      setCachedInput(defaultInput);
+      sourceDescription = 'sample input';
+      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, 'Sample input loaded. Contacting Gemini...');
     }
 
-    const briefing = await callGemini(usingCached ? cachedInput! : getCachedInput()!);
+    const briefing = await callGemini(getCachedInput()!);
 
     if (progressMessageId) {
-      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, 'Report ready. Formatting for Telegram...');
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        progressMessageId,
+        `Report ready using ${sourceDescription || 'cached input'}. Formatting for Telegram...`,
+      );
     }
 
     await ctx.reply(briefing.markdown_briefing, { parse_mode: 'Markdown' });
