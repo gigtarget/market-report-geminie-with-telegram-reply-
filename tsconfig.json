@@ -11,5 +11,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
+  "include": ["src/**/*"],
+  "exclude": ["tests"]
   "include": ["src/**/*", "tests/**/*"]
 }
