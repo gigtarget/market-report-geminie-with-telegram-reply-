@@ -4,7 +4,7 @@ import { config, logger } from './config.js';
 import { generateRoute } from './routes/generate.js';
 import { initBot } from './bot.js';
 
-const app = Fastify({ logger });
+const app = Fastify({ logger: { level: logger.level, redact: logger.redact } });
 
 app.register(rateLimit, {
   global: false,
