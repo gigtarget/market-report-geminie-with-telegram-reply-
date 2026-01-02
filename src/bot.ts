@@ -37,6 +37,11 @@ async function handleSetInput(ctx: Context) {
 }
 
 async function handlePremarket(ctx: Context) {
+  if (!ctx.chat) {
+    logger.warn('Received /premarket command without chat context');
+    return;
+  }
+
   if (!cachedInput) {
     await ctx.reply('No cached input. Use /setinput <json> first.');
     return;
@@ -60,6 +65,11 @@ async function handlePremarket(ctx: Context) {
 }
 
 async function handleReportPayload(ctx: Context, payloadText: string) {
+  if (!ctx.chat) {
+    logger.warn('Received report payload without chat context');
+    return;
+  }
+
   const trimmed = payloadText.trim();
 
   if (!trimmed) {
