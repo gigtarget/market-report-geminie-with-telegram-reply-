@@ -1,10 +1,10 @@
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import { config, logger } from './config.js';
+import { config, loggerOptions } from './config.js';
 import { generateRoute } from './routes/generate.js';
 import { initBot } from './bot.js';
 
-const app = Fastify({ logger: { level: logger.level, redact: logger.redact } });
+const app = Fastify({ logger: loggerOptions });
 
 app.register(rateLimit, {
   global: false,
