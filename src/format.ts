@@ -2,7 +2,7 @@ import { GeminiOutput } from './schemas.js';
 
 export function formatMarkdown(output: GeminiOutput): string {
   const calendarRows = output.calendar
-    .map((item) => `- **${item.event}** — ${item.impact}`)
+    .map((item: GeminiOutput['calendar'][number]) => `- **${item.event}** — ${item.impact}`)
     .join('\n');
 
   return [

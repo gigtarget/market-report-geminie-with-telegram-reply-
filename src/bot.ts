@@ -57,7 +57,7 @@ export async function sendTelegramMessage(markdown: string): Promise<void> {
   try {
     await botInstance.api.sendMessage(Number(config.telegramChatId), markdown, {
       parse_mode: 'Markdown',
-      disable_web_page_preview: true,
+      link_preview_options: { is_disabled: true },
     });
   } catch (err) {
     logger.error({ err }, 'Failed to send Telegram message');
@@ -74,12 +74,13 @@ export function initBot(): void {
 
   botInstance.command('setinput', handleSetInput);
   botInstance.command('premarket', handlePremarket);
-  botInstance.command('start', async (ctx) => {
+  botInstance.command('start', async (ctx: Context) => {
     await ctx.reply('Send /setinput <json> to cache data, then /premarket to generate the briefing.');
   });
 
+  botInstance.catch((err: unknown) => logger.error({ err }, 'Bot handler threw'));
+
   runner = run(botInstance);
-  runner.catch((err) => logger.error({ err }, 'Bot runner crashed'));
   logger.info('Telegram bot initialized');
 }
 
