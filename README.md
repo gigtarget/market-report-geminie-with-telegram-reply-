@@ -8,6 +8,7 @@ Production-ready Fastify + TypeScript service that calls Gemini to generate an I
 - Telegram bot commands:
   - `/setinput <json>` caches the payload in memory (validated).
   - `/premarket` generates a briefing using the cached payload.
+  - `/report <json>` (or sending the JSON as a plain text message) validates the payload, triggers generation immediately, and streams status updates back in Telegram.
 - Basic rate limiting on `/generate`.
 - Deploy-ready for Railway (listens on `PORT`, includes Procfile/start script). Railway Cron can call `/generate`.
 
