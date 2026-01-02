@@ -48,15 +48,15 @@ async function handlePremarket(ctx: Context) {
   }
 
   try {
-    const progress = await ctx.reply('Using cached input. Generating report...');
+    const progress = await ctx.reply('Using cached input. Contacting Gemini...');
     const briefing = await callGemini(cachedInput);
 
-    await ctx.api.editMessageText(ctx.chat.id, progress.message_id, 'Report generated. Sending to chat...');
+    await ctx.api.editMessageText(ctx.chat.id, progress.message_id, 'Report ready. Formatting for Telegram...');
     await ctx.reply(briefing.markdown_briefing, { parse_mode: 'Markdown' });
     await ctx.api.editMessageText(
       ctx.chat.id,
       progress.message_id,
-      'Report generated and sent. You can rerun /premarket or send new data.',
+      '✅ Report generated and sent. You can rerun /premarket or send new data.',
     );
   } catch (err) {
     logger.error({ err }, 'Failed to generate briefing via bot');
@@ -71,26 +71,33 @@ async function handleReportPayload(ctx: Context, payloadText: string) {
   }
 
   const trimmed = payloadText.trim();
+  const usingCached = !trimmed;
 
-  if (!trimmed) {
-    await ctx.reply('Send the market JSON as plain text or with /report <json>.');
+  if (usingCached && !cachedInput) {
+    await ctx.reply('No cached input found. Send /setinput <json> first or include JSON with /report <json>.');
     return;
   }
 
   let progressMessageId: number | null = null;
 
   try {
-    const parsed = JSON.parse(trimmed);
-    const validated = InputSchema.parse(parsed);
-    setCachedInput(validated);
+    if (usingCached) {
+      const progress = await ctx.reply('Using cached input. Contacting Gemini...');
+      progressMessageId = progress.message_id;
+    } else {
+      const progress = await ctx.reply('Validating payload...');
+      progressMessageId = progress.message_id;
 
-    const progress = await ctx.reply('Payload received. Calling Gemini to build your report...');
-    progressMessageId = progress.message_id;
+      const parsed = JSON.parse(trimmed);
+      const validated = InputSchema.parse(parsed);
+      setCachedInput(validated);
+      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, 'Payload validated. Contacting Gemini...');
+    }
 
-    const briefing = await callGemini(validated);
+    const briefing = await callGemini(usingCached ? cachedInput! : getCachedInput()!);
 
     if (progressMessageId) {
-      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, 'Report ready. Sending to chat...');
+      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, 'Report ready. Formatting for Telegram...');
     }
 
     await ctx.reply(briefing.markdown_briefing, { parse_mode: 'Markdown' });
@@ -139,7 +146,7 @@ export async function initBot(): Promise<void> {
   });
   botInstance.command('start', async (ctx: Context) => {
     await ctx.reply(
-      'Send /setinput <json> to cache data, /premarket to use cached data, or /report <json> to send and generate immediately.',
+      'Send /setinput <json> to cache data, /premarket to use cached data, /report <json> to send and generate immediately, or /report alone to reuse the cached input.',
     );
   });
 
