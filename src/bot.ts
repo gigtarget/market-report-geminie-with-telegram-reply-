@@ -122,7 +122,7 @@ export async function sendTelegramMessage(markdown: string): Promise<void> {
   }
 }
 
-export function initBot(): void {
+export async function initBot(): Promise<void> {
   if (!config.telegramToken) {
     logger.info('Telegram bot token not set; bot disabled');
     return;
@@ -154,6 +154,14 @@ export function initBot(): void {
   });
 
   botInstance.catch((err: unknown) => logger.error({ err }, 'Bot handler threw'));
+
+  try {
+    await botInstance.api.getMe();
+  } catch (err) {
+    logger.error({ err }, 'Telegram bot token is invalid or revoked; bot disabled');
+    botInstance = null;
+    return;
+  }
 
   runner = run(botInstance);
   logger.info('Telegram bot initialized');
