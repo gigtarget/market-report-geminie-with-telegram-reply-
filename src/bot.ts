@@ -43,11 +43,59 @@ async function handlePremarket(ctx: Context) {
   }
 
   try {
+    const progress = await ctx.reply('Using cached input. Generating report...');
     const briefing = await callGemini(cachedInput);
+
+    await ctx.api.editMessageText(ctx.chat.id, progress.message_id, 'Report generated. Sending to chat...');
     await ctx.reply(briefing.markdown_briefing, { parse_mode: 'Markdown' });
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      progress.message_id,
+      'Report generated and sent. You can rerun /premarket or send new data.',
+    );
   } catch (err) {
     logger.error({ err }, 'Failed to generate briefing via bot');
     await ctx.reply('Failed to generate briefing. Please try again later.');
+  }
+}
+
+async function handleReportPayload(ctx: Context, payloadText: string) {
+  const trimmed = payloadText.trim();
+
+  if (!trimmed) {
+    await ctx.reply('Send the market JSON as plain text or with /report <json>.');
+    return;
+  }
+
+  let progressMessageId: number | null = null;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const validated = InputSchema.parse(parsed);
+    setCachedInput(validated);
+
+    const progress = await ctx.reply('Payload received. Calling Gemini to build your report...');
+    progressMessageId = progress.message_id;
+
+    const briefing = await callGemini(validated);
+
+    if (progressMessageId) {
+      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, 'Report ready. Sending to chat...');
+    }
+
+    await ctx.reply(briefing.markdown_briefing, { parse_mode: 'Markdown' });
+
+    if (progressMessageId) {
+      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, '✅ Report generated and delivered.');
+    }
+  } catch (err) {
+    logger.error({ err }, 'Failed to generate report from direct payload');
+
+    if (progressMessageId) {
+      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, '❌ Failed to generate report. Check your JSON and try again.');
+    } else {
+      await ctx.reply('Invalid payload or generation failure. Ensure valid JSON matching the input schema.');
+    }
   }
 }
 
@@ -74,8 +122,25 @@ export function initBot(): void {
 
   botInstance.command('setinput', handleSetInput);
   botInstance.command('premarket', handlePremarket);
+  botInstance.command('report', async (ctx: Context) => {
+    const text = ctx.message?.text ?? '';
+    const payloadText = text.replace(/^\/report\s*/, '');
+    await handleReportPayload(ctx, payloadText);
+  });
   botInstance.command('start', async (ctx: Context) => {
-    await ctx.reply('Send /setinput <json> to cache data, then /premarket to generate the briefing.');
+    await ctx.reply(
+      'Send /setinput <json> to cache data, /premarket to use cached data, or /report <json> to send and generate immediately.',
+    );
+  });
+
+  botInstance.on('message:text', async (ctx) => {
+    const text = ctx.message?.text ?? '';
+
+    if (text.startsWith('/')) {
+      return;
+    }
+
+    await handleReportPayload(ctx, text);
   });
 
   botInstance.catch((err: unknown) => logger.error({ err }, 'Bot handler threw'));
