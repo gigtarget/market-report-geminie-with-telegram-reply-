@@ -13,7 +13,9 @@ export const config = {
   telegramChatId: process.env.TELEGRAM_CHAT_ID,
 };
 
-export const logger = pino({
+export const loggerOptions = {
   level: process.env.LOG_LEVEL ?? 'info',
   redact: ['geminiApiKey', 'telegramToken', 'telegramChatId'],
-});
+} as const satisfies pino.LoggerOptions;
+
+export const logger = pino(loggerOptions);
