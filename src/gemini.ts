@@ -13,9 +13,13 @@ type SectionPrompt<T> = {
   pickInput: (input: InputData) => unknown;
 };
 
-const IndiaSectionSchema = GeminiOutputSchema.pick({
+const DomesticSectionSchema = GeminiOutputSchema.pick({
+  report_date: true,
+  cover_summary: true,
   bottom_line: true,
-  indices: true,
+  nifty_levels: true,
+  drivers: true,
+  domestic_indices: true,
   flows: true,
   headwinds: true,
 });
@@ -23,7 +27,7 @@ const IndiaSectionSchema = GeminiOutputSchema.pick({
 const GlobalSectionSchema = GeminiOutputSchema.pick({
   global_cues: true,
   commodities_currency: true,
-  pockets_of_strength: true,
+  pocket_of_strength: true,
 });
 
 const PlaybookSectionSchema = GeminiOutputSchema.pick({
@@ -35,7 +39,8 @@ function buildSectionPrompt<T>({ description, pickInput }: SectionPrompt<T>, inp
   const jsonInput = JSON.stringify(pickInput(input), null, 2);
 
   return [
-    'You are a sell-side strategist preparing the India pre-market briefing.',
+    'You are a professional institutional market strategist preparing an India pre-market tactical briefing.',
+    'Tone: calm, analytical, cautious, institutional; no fluff, no motivational language, no emojis.',
     'Return ONLY valid JSON for the requested section with no markdown and no extra keys.',
     description,
     'Source data (JSON):',
@@ -96,11 +101,11 @@ async function callGeminiSection<T>(spec: SectionPrompt<T>, input: InputData): P
 }
 
 export async function callGemini(input: InputData): Promise<GeminiOutput> {
-  const indiaSection: SectionPrompt<z.infer<typeof IndiaSectionSchema>> = {
-    name: 'India indices & flows',
-    schema: IndiaSectionSchema,
+  const indiaSection: SectionPrompt<z.infer<typeof DomesticSectionSchema>> = {
+    name: 'Domestic structure',
+    schema: DomesticSectionSchema,
     description:
-      'Return JSON with {"bottom_line": {"bias": string, "key_levels": string}, "indices": {"nifty": {"summary": string, "key_level"?: string}, "banknifty": {"summary": string, "key_level"?: string}, "sensex": {"summary": string, "key_level"?: string}}, "flows": {"fii": string, "dii": string, "interpretation": string}, "headwinds": {"vix"?: string, "fx"?: string, "holiday"?: string, "summary": string}}. Use the supplied levels and percentages directly; avoid guessing numbers.',
+      'Return JSON with keys {"report_date": string, "cover_summary": {"bias_line": string}, "bottom_line": {"bias": string, "rationale": string, "trend_condition": string, "bounce_behavior": string, "conviction": string}, "nifty_levels": {"current": string, "resistance": string, "support": string, "takeaway": string}, "drivers": [{"headline": string, "note": string}] (exactly 3), "domestic_indices": {"nifty": {"close": number, "change_pct": number, "takeaway": string}, "banknifty": {...}, "sensex": {...}}, "flows": {"fii_cr": number, "dii_cr": number, "dominance": string, "absorption": string, "sustainability": string}, "headwinds": [{"title": string, "data_point": string, "implication": string}] with up to 3 items. Keep numbers and levels grounded in provided data and avoid fabricating new figures.',
     pickInput: (data) => ({
       date_ist: data.date_ist,
       indices: data.indices,
@@ -116,7 +121,7 @@ export async function callGemini(input: InputData): Promise<GeminiOutput> {
     name: 'Global cues & commodities',
     schema: GlobalSectionSchema,
     description:
-      'Return JSON with {"global_cues": {"us_futures": string, "asia_markets": string, "yields": string, "implication": string}, "commodities_currency": {"commodities": string, "currency": string, "sectors_to_watch": string}, "pockets_of_strength": {"sectors": string, "insight": string}}. Keep the commentary tied to the provided moves and avoid fabricating prices.',
+      'Return JSON with {"global_cues": {"us_futures": string, "us10y": string, "india10y": string, "asia_markets": string, "bottom_line": string}, "commodities_currency": {"crude": {"move": string, "reason": string, "sector_impact": string}, "gold_silver": {...}, "usd_inr": {...}}, "pocket_of_strength": {"sector": string, "reason": string, "tradeable": string, "actionable": string}}. Commentary should mirror the supplied percentage moves and not invent new prices.',
     pickInput: (data) => ({
       date_ist: data.date_ist,
       global: data.global,
@@ -129,7 +134,7 @@ export async function callGemini(input: InputData): Promise<GeminiOutput> {
     name: 'Calendar & playbook',
     schema: PlaybookSectionSchema,
     description:
-      'Return JSON with {"calendar": [{"event": string, "impact": string}], "playbook": {"nifty_strategy": string, "banknifty_strategy": string, "execution_rules": string}}. Strategies should reference the supplied key levels and tone from the data.',
+      'Return JSON with {"calendar": [{"event": string, "time_ist": string, "impact": string}], "playbook": {"nifty": {"bias": string, "resistance": string, "support": string, "trigger": string}, "banknifty": {"bias": string, "invalidation": string, "change_condition": string}, "execution_rules": [string, string, string]}}. Tie triggers and levels back to supplied support/resistance data.',
     pickInput: (data) => ({
       date_ist: data.date_ist,
       events: data.events,
@@ -138,13 +143,13 @@ export async function callGemini(input: InputData): Promise<GeminiOutput> {
     }),
   };
 
-  const [india, global, playbook] = await Promise.all([
+  const [domestic, global, playbook] = await Promise.all([
     callGeminiSection(indiaSection, input),
     callGeminiSection(globalSection, input),
     callGeminiSection(playbookSection, input),
   ]);
 
-  const combined = { ...india, ...global, ...playbook } as GeminiOutput;
+  const combined = { ...domestic, ...global, ...playbook } as GeminiOutput;
   const markdown_briefing = formatMarkdown({ ...combined, markdown_briefing: '' } as GeminiOutput);
 
   return GeminiOutputSchema.parse({ ...combined, markdown_briefing });
