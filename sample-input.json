@@ -1,0 +1,30 @@
+{
+  "date_ist": "2026-01-02",
+  "indices": {
+    "nifty": { "current": 23500, "change_pct": 0.5, "close": 23383 },
+    "banknifty": { "current": 51500, "change_pct": 0.8, "close": 51100 },
+    "sensex": { "current": 78000, "change_pct": 0.4, "close": 77750 }
+  },
+  "key_levels": {
+    "nifty": { "support": 23250, "resistance": 23600, "zone": "23250-23350 demand" },
+    "banknifty": { "resistance": 51800, "pivot": 51250 }
+  },
+  "flows": { "fii_cr": 1250, "dii_cr": -350, "asof_date_ist": "2026-01-01" },
+  "volatility": { "india_vix_change_pct": -3.4, "note": "VIX cools for fourth session" },
+  "fx": { "usdinr": 83.1, "dxy": 102.3, "note": "Stable USD/INR" },
+  "global": {
+    "sp500_futures_change_pct": 0.2,
+    "asia": { "nikkei": 1.1, "shanghai": "flat", "hongkong": "+0.6%" },
+    "yields": { "us10y": 4.05, "india10y": 7.14 }
+  },
+  "commodities": {
+    "brent": { "price": 78.3, "change_pct": -0.4 },
+    "gold": { "change_pct": 0.3 },
+    "silver": { "change_pct": -0.2 }
+  },
+  "events": [
+    { "title": "India PMI", "when_ist": "09:30", "impact": "Services strength supportive" },
+    { "title": "US NFP", "when_ist": "19:00", "impact": "Volatility risk into close" }
+  ],
+  "narrative_overrides": { "bias": "Buy dips while above 23250" }
+}
