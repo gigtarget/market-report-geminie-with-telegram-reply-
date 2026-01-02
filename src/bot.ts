@@ -55,6 +55,11 @@ async function handlePremarket(ctx: Context) {
     return;
   }
 
+  if (!config.geminiApiKey) {
+    await ctx.reply('GEMINI_API_KEY is not configured. Please set it and try again.');
+    return;
+  }
+
   try {
     const progress = await ctx.reply('Using cached input. Contacting Gemini...');
     const briefing = await callGemini(cachedInput);
@@ -83,6 +88,11 @@ async function handleReportPayload(ctx: Context, payloadText: string) {
   let sourceDescription = '';
 
   try {
+    if (!config.geminiApiKey) {
+      await ctx.reply('GEMINI_API_KEY is not configured. Please set it and try again.');
+      return;
+    }
+
     if (trimmed) {
       const progress = await ctx.reply('Validating payload...');
       progressMessageId = progress.message_id;
@@ -124,10 +134,15 @@ async function handleReportPayload(ctx: Context, payloadText: string) {
   } catch (err) {
     logger.error({ err }, 'Failed to generate report from direct payload');
 
+    const message =
+      err instanceof Error && err.message.includes('GEMINI_API_KEY')
+        ? '❌ Failed to generate report because GEMINI_API_KEY is missing.'
+        : '❌ Failed to generate report. Check your JSON and try again.';
+
     if (progressMessageId) {
-      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, '❌ Failed to generate report. Check your JSON and try again.');
+      await ctx.api.editMessageText(ctx.chat.id, progressMessageId, message);
     } else {
-      await ctx.reply('Invalid payload or generation failure. Ensure valid JSON matching the input schema.');
+      await ctx.reply(message);
     }
   }
 }
