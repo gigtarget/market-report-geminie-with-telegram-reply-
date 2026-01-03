@@ -1,9 +1,11 @@
 import logging
+import re
 import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import List, Optional
+from html import unescape
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 
@@ -12,14 +14,14 @@ import requests
 DEFAULT_TIMEOUT = 10
 
 
-RSS_SOURCES = [
+RSS_SOURCES: List[Tuple[str, str]] = [
     # India-focused market and macro sources
-    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
-    "https://www.moneycontrol.com/rss/latestnews.xml",
-    "https://www.business-standard.com/rss/markets-106.rss",
-    "https://www.livemint.com/rss/markets",
+    ("https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms", "india"),
+    ("https://www.moneycontrol.com/rss/latestnews.xml", "india"),
+    ("https://www.business-standard.com/rss/markets-106.rss", "india"),
+    ("https://www.livemint.com/rss/markets", "india"),
     # Global macro with India relevance
-    "https://feeds.reuters.com/reuters/INtopNews",
+    ("https://feeds.reuters.com/reuters/INtopNews", "global"),
 ]
 
 
@@ -29,6 +31,7 @@ class NewsItem:
     link: str
     source_domain: str
     published_at: Optional[datetime]
+    category: str
     summary: Optional[str] = None
 
 
@@ -53,7 +56,18 @@ def _extract_text(element: Optional[ET.Element], tag_options: List[str]) -> Opti
     return None
 
 
-def _parse_item(item: ET.Element, source_url: str) -> Optional[NewsItem]:
+def _clean_summary(raw: str) -> Optional[str]:
+    if not raw:
+        return None
+
+    # Remove HTML tags and collapse whitespace
+    without_tags = re.sub(r"<[^>]+>", " ", raw)
+    unescaped = unescape(without_tags)
+    collapsed = " ".join(unescaped.split())
+    return collapsed or None
+
+
+def _parse_item(item: ET.Element, source_url: str, category: str) -> Optional[NewsItem]:
     title = _extract_text(item, ["title"]) or ""
     link = _extract_text(item, ["link"]) or ""
 
@@ -65,21 +79,23 @@ def _parse_item(item: ET.Element, source_url: str) -> Optional[NewsItem]:
     published_text = _extract_text(item, ["pubDate", "published", "updated", "{http://purl.org/dc/elements/1.1/}date"])
     published_at = _parse_datetime(published_text) if published_text else None
 
-    summary = _extract_text(item, ["description", "summary"])
+    summary_raw = _extract_text(item, ["description", "summary"])
+    summary = _clean_summary(summary_raw) if summary_raw else None
 
     return NewsItem(
         title=title.strip(),
         link=link.strip(),
         source_domain=domain,
         published_at=published_at,
-        summary=summary.strip() if summary else None,
+        category=category,
+        summary=summary,
     )
 
 
 def fetch_rss_items() -> List[NewsItem]:
     items: List[NewsItem] = []
 
-    for feed_url in RSS_SOURCES:
+    for feed_url, category in RSS_SOURCES:
         try:
             response = requests.get(
                 feed_url,
@@ -99,12 +115,12 @@ def fetch_rss_items() -> List[NewsItem]:
 
         channel = root.find("channel") or root
         for item in channel.findall("item") or []:
-            parsed = _parse_item(item, feed_url)
+            parsed = _parse_item(item, feed_url, category)
             if parsed:
                 items.append(parsed)
 
         for entry in channel.findall("{http://www.w3.org/2005/Atom}entry"):
-            parsed = _parse_item(entry, feed_url)
+            parsed = _parse_item(entry, feed_url, category)
             if parsed:
                 items.append(parsed)
 
