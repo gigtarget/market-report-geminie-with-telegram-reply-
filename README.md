@@ -1,57 +1,52 @@
-# Gemini-powered Indian Market Report Telegram Bot
+# Indian Market Report Telegram Bot (Python)
 
-A small Telegram bot that fetches the latest Indian equity market close data and news tone via the Gemini API, formats it as a concise report, and replies when users send `/report`. Designed for easy deployment to Railway.
+A production-ready Telegram bot that delivers the latest Indian market close data for Nifty 50, Sensex, and Nifty Bank. Data is pulled directly from Yahoo Finance via `yfinance`, and the bot replies with a formatted report when users send `/report`.
 
 ## Features
-- `/report` command triggers on-demand report generation only.
-- Pulls structured close data for Nifty 50, BSE Sensex, and Nifty Bank through Gemini.
-- Validates Gemini responses to guard against malformed payloads.
-- Cleanly formatted, Telegram-friendly message with headline and snapshot.
+- `/start` for quick usage help.
+- `/report` fetches the most recent trading session close from Yahoo Finance (no hardcoded dates).
+- Handles weekends/holidays automatically by using the latest available close.
+- Neutral, code-generated summary plus per-index snapshot with absolute and percentage moves.
+- Graceful fallback messaging and structured logging for errors.
+- Ready for long-running deployment on Railway.
 
-## Prerequisites
-- Node.js 18+ (for native `fetch`).
-- Gemini API access and a Telegram bot token.
-- Railway account (or any Node-compatible host).
+## Requirements
+- Python 3.11+
+- `TELEGRAM_BOT_TOKEN` environment variable set to your BotFather token.
 
 ## Setup
 1. Install dependencies:
    ```bash
-   npm install
+   pip install -r requirements.txt
    ```
-2. Create a `.env` file:
+2. Export your Telegram token:
    ```bash
-   GEMINI_API_KEY=your_gemini_api_key
-   GEMINI_MODEL=gemini-2.5-flash
-   TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+   export TELEGRAM_BOT_TOKEN=your_telegram_token
    ```
-3. Run locally:
+3. Run the bot locally:
    ```bash
-   npm run dev
+   python main.py
    ```
-   The bot will start polling Telegram and log when ready.
+   The bot will start polling and respond to `/start` and `/report`.
 
 ## Deployment to Railway
 1. Push this repository to GitHub.
-2. Create a new Railway project from the repo and set the following environment variables in Railway:
-   - `GEMINI_API_KEY`
-   - `GEMINI_MODEL` (optional, defaults to `gemini-2.5-flash`)
+2. Create a new Railway project from the repo.
+3. Set the environment variable in Railway:
    - `TELEGRAM_BOT_TOKEN`
-3. Set the Railway start command to:
+4. Configure the start command:
    ```bash
-   npm run start
+   python main.py
    ```
-4. Deploy. The bot runs continuously as a Telegram service and responds to `/report`.
+5. Deploy. Railway will keep the bot process running for long-lived Telegram polling.
 
 ## How it works
-- `src/geminiClient.ts` prompts Gemini to return a strict JSON payload with the latest close data and headline.
-- `src/reportFormatter.ts` turns that structured response into the Telegram-friendly report text.
-- `src/index.ts` wires the Telegram command handler, fetches data from Gemini on demand, and sends the formatted message.
-
-## Environment variables
-- `GEMINI_API_KEY` *(required)*: Gemini API key.
-- `GEMINI_MODEL` *(optional)*: Gemini model name; defaults to `gemini-2.5-flash`.
-- `TELEGRAM_BOT_TOKEN` *(required)*: Token from BotFather.
+- `main.py` houses all logic:
+  - Fetches daily data for the three indices using `yfinance` and determines the latest trading session from returned data.
+  - Builds a clean text report with close, point change, and percentage change for each index, and a neutral summary line derived from market direction.
+  - Handles `/start` and `/report` via `python-telegram-bot` v20+ and logs errors without exposing secrets.
 
 ## Notes
-- The bot only reacts to `/report`; other messages are ignored.
-- Errors are logged and a friendly fallback message is sent if Gemini is unreachable or returns invalid data.
+- No AI is used for numbers; all values come directly from Yahoo Finance responses.
+- Timezone conversion uses Asia/Kolkata to display the correct session date.
+- If any index fetch fails, the bot replies with an apologetic error message instead of crashing.
