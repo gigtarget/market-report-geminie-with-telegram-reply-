@@ -16,6 +16,11 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from nse_fiidii import FiiDiiData, get_fii_dii_data
+from news_dedupe import dedupe_similar, filter_seen, story_id_from_item
+from news_fetch import NewsItem, fetch_rss_items
+from news_filter import filter_by_time, relevance_filter
+from news_rank import TIER1_DOMAINS, rank_and_select
+from sent_store import SentStore
 from templates import classify_market, get_opening_line, initialize_templates_store
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -57,6 +62,9 @@ class MarketReport:
     top_gainers: List["StockMover"] | None = None
     bottom_performers: List["StockMover"] | None = None
     movers_warning: Optional[str] = None
+    news_india: List[NewsItem] | None = None
+    news_global: List[NewsItem] | None = None
+    news_warning: Optional[str] = None
 
 
 @dataclass
@@ -66,6 +74,13 @@ class StockMover:
     previous_close: float
     change: float
     percent_change: float
+
+
+@dataclass
+class NewsDigest:
+    india_items: List[NewsItem]
+    global_items: List[NewsItem]
+    warning: Optional[str] = None
 
 
 _REPORT_CACHE: Dict[str, Optional[object]] = {"report": None, "timestamp": None}
@@ -243,6 +258,29 @@ def format_report(report: MarketReport) -> str:
             else:
                 lines.append("DII data unavailable")
 
+    lines.extend(["", "News (India-focused):"])
+
+    if report.news_warning:
+        lines.append(report.news_warning)
+
+    if report.news_india:
+        for item in report.news_india:
+            bullet = f"• {item.title} ({item.source_domain})"
+            if item.link:
+                bullet = f"{bullet} - {item.link}"
+            lines.append(bullet)
+    else:
+        lines.append("No India-focused news available.")
+
+    if report.news_global:
+        lines.append("")
+        lines.append("Global add-ons (India-linked):")
+        for item in report.news_global:
+            bullet = f"• {item.title} ({item.source_domain})"
+            if item.link:
+                bullet = f"{bullet} - {item.link}"
+            lines.append(bullet)
+
     return "\n".join(lines)
 
 
@@ -394,6 +432,49 @@ def _fetch_top_movers() -> Tuple[List[StockMover], List[StockMover], Optional[st
     return top_gainers, bottom_performers, warning
 
 
+def _build_news_digest(now_ist: datetime) -> NewsDigest:
+    sent_store = SentStore()
+    warning: Optional[str] = None
+    try:
+        fetched = fetch_rss_items()
+        if not fetched:
+            return NewsDigest([], [], "No news fetched from sources.")
+
+        time_filtered = filter_by_time(fetched, now_ist)
+        with_ids = [(item, story_id_from_item(item)) for item in time_filtered]
+        cross_day_filtered = filter_seen(with_ids, sent_store)
+
+        relevance_candidates = [pair[0] for pair in cross_day_filtered]
+        india_items, global_candidates, relevance_warning = relevance_filter(
+            relevance_candidates, now_ist
+        )
+        if relevance_warning and not warning:
+            warning = relevance_warning
+
+        india_pairs = [(item, story_id_from_item(item)) for item in india_items]
+        global_pairs = [(item, story_id_from_item(item)) for item in global_candidates]
+
+        india_pairs = dedupe_similar(india_pairs, TIER1_DOMAINS)
+        global_pairs = dedupe_similar(global_pairs, TIER1_DOMAINS)
+
+        ranked_india, ranked_global = rank_and_select(india_pairs, global_pairs, now_ist)
+
+        selected_story_ids = [story_id for _, story_id, _ in ranked_india + ranked_global]
+        if selected_story_ids:
+            sent_store.mark_many(selected_story_ids)
+
+        india_final = [item for item, _, _ in ranked_india]
+        global_final = [item for item, _, _ in ranked_global]
+
+        if not india_final:
+            warning = warning or "No India-focused news passed filters."
+
+        return NewsDigest(india_final, global_final, warning)
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("News pipeline failed: %s", exc)
+        return NewsDigest([], [], warning or "News unavailable right now.")
+
+
 def _build_fresh_market_report() -> MarketReport:
     start_time = time.monotonic()
     logging.info("Starting market report generation for %s tickers", len(INDEX_TICKERS))
@@ -415,14 +496,16 @@ def _build_fresh_market_report() -> MarketReport:
 
     report_date = max(session_dates) if session_dates else date.today()
 
-    latest_ts_display = max(last_ts_candidates) if last_ts_candidates else datetime.now(tz=IST)
-    today_ist = datetime.now(tz=IST).date()
+    now_ist = datetime.now(tz=IST)
+    latest_ts_display = max(last_ts_candidates) if last_ts_candidates else now_ist
+    today_ist = now_ist.date()
     market_closed = latest_ts_display.date() < today_ist
 
     generated_at = datetime.now(timezone.utc)
 
     fii_dii_data, fii_dii_warning = get_fii_dii_data()
     top_gainers, bottom_performers, movers_warning = _fetch_top_movers()
+    news_digest = _build_news_digest(now_ist)
 
     duration = time.monotonic() - start_time
     logging.info("Finished market report generation duration=%.3fs", duration)
@@ -438,6 +521,9 @@ def _build_fresh_market_report() -> MarketReport:
         top_gainers=top_gainers,
         bottom_performers=bottom_performers,
         movers_warning=movers_warning,
+        news_india=news_digest.india_items,
+        news_global=news_digest.global_items,
+        news_warning=news_digest.warning,
     )
 
 
