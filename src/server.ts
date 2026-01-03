@@ -28,7 +28,7 @@ app.register(generateRoute);
 
 const start = async () => {
   try {
-    await initBot();
+    await initBot(app);
     await app.listen({ port: config.port, host: '0.0.0.0' });
   } catch (err) {
     app.log.error(err);

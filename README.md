@@ -32,8 +32,9 @@ Production-ready Fastify + TypeScript service that calls Gemini to generate an I
    Required variables:
    - `GEMINI_API_KEY`
    - `GEMINI_MODEL` (default `gemini-2.5-flash` if omitted)
-   - `TELEGRAM_BOT_TOKEN` (optional for bot)
-   - `TELEGRAM_CHAT_ID` (optional for push from /generate)
+  - `TELEGRAM_BOT_TOKEN` (optional for bot)
+  - `TELEGRAM_CHAT_ID` (optional for push from /generate)
+  - `TELEGRAM_WEBHOOK_URL` (optional, set to enable webhook delivery instead of long polling)
    - `PORT` (defaults to 3000)
 3. Run in dev mode:
    ```bash
