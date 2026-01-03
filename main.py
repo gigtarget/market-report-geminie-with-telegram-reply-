@@ -11,6 +11,8 @@ import yfinance as yf
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+from nse_fiidii import FiiDiiData, get_fii_dii_data
+
 IST = ZoneInfo("Asia/Kolkata")
 FETCH_PERIOD = "10d"
 FETCH_INTERVAL = "1d"
@@ -41,6 +43,8 @@ class MarketReport:
     market_closed: bool
     from_cache: bool = False
     warning: Optional[str] = None
+    fii_dii: Optional[FiiDiiData] = None
+    fii_dii_warning: Optional[str] = None
 
 
 _REPORT_CACHE: Dict[str, Optional[object]] = {"report": None, "timestamp": None}
@@ -94,6 +98,45 @@ def format_report(report: MarketReport) -> str:
             f"{idx.name}: {_format_number(idx.close)} "
             f"({_format_change(idx.change)} | {_format_change(idx.percent_change)}%)"
         )
+
+    if report.fii_dii or report.fii_dii_warning:
+        lines.extend(["", "FII/DII (NSE):"])
+
+        if report.fii_dii_warning:
+            lines.append(report.fii_dii_warning)
+
+        if report.fii_dii:
+            as_on_text = f"As on: {report.fii_dii.as_on}"
+            if (
+                report.market_closed
+                and report.fii_dii.as_on_date
+                and report.fii_dii.as_on_date < report.session_date
+            ):
+                lines.append(
+                    f"Market closed — showing last reported FII/DII data (As on: {report.fii_dii.as_on})"
+                )
+            else:
+                lines.append(as_on_text)
+
+            if report.fii_dii.fii:
+                lines.append(
+                    "FII "
+                    f"Buy: {_format_number(report.fii_dii.fii.buy)} | "
+                    f"Sell: {_format_number(report.fii_dii.fii.sell)} | "
+                    f"Net: {_format_number(report.fii_dii.fii.net)}"
+                )
+            else:
+                lines.append("FII data unavailable")
+
+            if report.fii_dii.dii:
+                lines.append(
+                    "DII "
+                    f"Buy: {_format_number(report.fii_dii.dii.buy)} | "
+                    f"Sell: {_format_number(report.fii_dii.dii.sell)} | "
+                    f"Net: {_format_number(report.fii_dii.dii.net)}"
+                )
+            else:
+                lines.append("DII data unavailable")
 
     return "\n".join(lines)
 
@@ -218,6 +261,8 @@ def _build_fresh_market_report() -> MarketReport:
 
     generated_at = datetime.now(timezone.utc)
 
+    fii_dii_data, fii_dii_warning = get_fii_dii_data()
+
     duration = time.monotonic() - start_time
     logging.info("Finished market report generation duration=%.3fs", duration)
 
@@ -227,6 +272,8 @@ def _build_fresh_market_report() -> MarketReport:
         last_timestamp_ist=latest_ts_display,
         generated_at_utc=generated_at,
         market_closed=market_closed,
+        fii_dii=fii_dii_data,
+        fii_dii_warning=fii_dii_warning,
     )
 
 
