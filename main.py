@@ -14,6 +14,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from nse_fiidii import FiiDiiData, get_fii_dii_data
+from templates import classify_market, get_opening_line, initialize_templates_store
 
 IST = ZoneInfo("Asia/Kolkata")
 FETCH_PERIOD = "10d"
@@ -78,7 +79,26 @@ def _determine_summary(indices: List[IndexSnapshot]) -> str:
 
 
 def format_report(report: MarketReport) -> str:
-    summary = _determine_summary(report.indices)
+    opening_line: Optional[str]
+    try:
+        indices_pct = {idx.name: idx.percent_change for idx in report.indices}
+        direction, strength, leader = classify_market(indices_pct, report.market_closed)
+        nifty_pct = indices_pct.get("Nifty 50", 0.0)
+        sensex_pct = indices_pct.get("Sensex", 0.0)
+        banknifty_pct = indices_pct.get("Nifty Bank", 0.0)
+        opening_line = get_opening_line(
+            report.session_date,
+            report.market_closed,
+            nifty_pct,
+            sensex_pct,
+            banknifty_pct,
+            leader,
+            strength,
+            direction,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("Falling back to summary line: %s", exc)
+        opening_line = _determine_summary(report.indices)
 
     lines = [
         f"Generated at (UTC): {report.generated_at_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC",
@@ -94,7 +114,7 @@ def format_report(report: MarketReport) -> str:
 
     lines.extend([
         "",
-        summary,
+        opening_line,
         "",
         "Market Indices Snapshot:",
     ])
@@ -395,6 +415,8 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+
+    initialize_templates_store()
 
     if _POLLING_STARTED:
         raise RuntimeError("Telegram polling already running in this process")
