@@ -1,6 +1,7 @@
 import csv
 import io
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -15,10 +16,15 @@ CACHE_TTL = timedelta(minutes=10)
 
 _CACHE: Dict[str, Optional[object]] = {"data": None, "timestamp": None}
 
+# NOTE:
+# - Do NOT include "br" in Accept-Encoding (brotli can break decoding in some deploys).
+# - Keep this "browser-ish" but not too strict.
 _COMMON_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
@@ -45,8 +51,15 @@ class FiiDiiData:
 
 
 def _normalize_header(value: str) -> str:
-    value = value or ""
-    return " ".join(value.strip().lower().split())
+    """
+    Normalize header names reliably:
+    - remove UTF-8 BOM
+    - collapse whitespace including newlines/tabs
+    - lowercase
+    """
+    value = (value or "").lstrip("\ufeff")
+    value = re.sub(r"\s+", " ", value).strip().lower()
+    return value
 
 
 def _safe_preview(text: str, length: int = SAFE_PREVIEW_LENGTH) -> str:
@@ -57,9 +70,9 @@ def _validate_csv_payload(content: str) -> None:
     snippet = (content or "").lstrip()
     if not snippet:
         raise ValueError("Empty response body from NSE")
-    preview = _safe_preview(snippet)
+    # Only reject obvious non-CSV payloads
     if snippet.startswith("<") or snippet.startswith("{"):
-        raise ValueError(f"Unexpected NSE payload {preview}")
+        raise ValueError(f"Unexpected NSE payload {_safe_preview(snippet)}")
 
 
 def _clean_float(value: str) -> Optional[float]:
@@ -68,31 +81,58 @@ def _clean_float(value: str) -> Optional[float]:
     cleaned = value.replace(",", "").strip()
     if not cleaned:
         return None
-    return float(cleaned)
+    try:
+        return float(cleaned)
+    except Exception:  # noqa: BLE001
+        return None
 
 
-def _find_column(fieldnames: List[str], keywords: List[str]) -> Optional[str]:
+def _find_column(
+    fieldnames: List[str],
+    keywords: List[str],
+    require_all: bool = False,
+) -> Optional[str]:
+    """
+    Fuzzy find column by keywords.
+    - require_all=False => any keyword match
+    - require_all=True  => all keywords must match
+    """
+    keywords_norm = [k.lower() for k in keywords]
     for name in fieldnames:
         normalized = _normalize_header(name)
-        for keyword in keywords:
-            if keyword.lower() in normalized:
+        if require_all:
+            if all(k in normalized for k in keywords_norm):
+                return name
+        else:
+            if any(k in normalized for k in keywords_norm):
                 return name
     return None
 
 
 def _find_value_column(fieldnames: List[str], keyword: str) -> Optional[str]:
+    """
+    Prefer columns like "BUY VALUE (₹ Crores)" over just "BUY".
+    """
     best: Optional[str] = None
     best_score = -1
+    k = keyword.lower()
+
     for name in fieldnames:
         normalized = _normalize_header(name)
-        if keyword.lower() not in normalized:
+        if k not in normalized:
             continue
+
         score = 1
+        # Prefer value columns
         if "value" in normalized:
+            score += 2
+        if "crore" in normalized or "₹" in name:
             score += 1
+
         if score > best_score:
             best = name
             best_score = score
+
     return best
 
 
@@ -116,7 +156,8 @@ def _decode_response_content(response: requests.Response) -> str:
             if fallback.count("\ufffd") < replacement_count:
                 decoded = fallback
 
-    return decoded
+    # Strip BOM if present
+    return decoded.lstrip("\ufeff")
 
 
 def _parse_date(value: str) -> Optional[date]:
@@ -128,28 +169,56 @@ def _parse_date(value: str) -> Optional[date]:
     return None
 
 
+def _maybe_fix_missing_newlines(content: str) -> str:
+    """
+    NSE sometimes returns a CSV where record separators appear as: ...") "DII",...
+    (i.e., quote, whitespace, quote) due to transport/formatting or logging artifacts.
+    If we see almost no newlines, try inserting them between records.
+    This is a best-effort fix and only runs when newline count is suspiciously low.
+    """
+    if not content:
+        return content
+    # If we have at least header newline + rows, leave it.
+    if content.count("\n") >= 2:
+        return content
+
+    # If everything is on one line, insert newlines between records safely.
+    # Replace: `" "DII"` -> `"\n"DII"` (same for FII/FPI etc.)
+    # We only insert before a starting quote that begins a known category row.
+    pattern = r'"\s+(?="(?:DII|FII/FPI|FII|FPI)")'
+    fixed = re.sub(pattern, '"\n', content)
+    return fixed
+
+
 def _parse_csv(content: str) -> FiiDiiData:
+    content = (content or "").lstrip("\ufeff")
     _validate_csv_payload(content)
 
+    content = _maybe_fix_missing_newlines(content)
+
     reader = csv.DictReader(io.StringIO(content))
-    fieldnames = reader.fieldnames or []
-    normalized_fieldnames = [_normalize_header(name) for name in fieldnames]
-    if normalized_fieldnames:
-        reader.fieldnames = normalized_fieldnames
-        fieldnames = normalized_fieldnames
-    if not fieldnames:
+    raw_fieldnames = reader.fieldnames or []
+    if not raw_fieldnames:
         raise ValueError("CSV response missing header")
 
-    date_col = _find_column(fieldnames, ["date"])
-    client_col = _find_column(fieldnames, ["category"]) or _find_column(
-        fieldnames, ["type", "client"]
-    )
-    buy_col = _find_value_column(fieldnames, "buy")
-    sell_col = _find_value_column(fieldnames, "sell")
-    net_col = _find_value_column(fieldnames, "net")
+    # Build normalized header list and force DictReader to use them
+    normalized_fieldnames = [_normalize_header(name) for name in raw_fieldnames]
+    reader.fieldnames = normalized_fieldnames
+    fieldnames = normalized_fieldnames
 
-    if not all([date_col, client_col, buy_col, sell_col, net_col]):
-        raise ValueError("Required columns not found in CSV")
+    # Find columns in normalized space
+    date_col = _find_column(fieldnames, ["date"])
+    cat_col = _find_column(fieldnames, ["category"]) or _find_column(fieldnames, ["client", "type"])
+    buy_col = _find_value_column(fieldnames, "buy") or _find_column(fieldnames, ["buy"])
+    sell_col = _find_value_column(fieldnames, "sell") or _find_column(fieldnames, ["sell"])
+    net_col = _find_value_column(fieldnames, "net") or _find_column(fieldnames, ["net"])
+
+    if not all([date_col, cat_col, buy_col, sell_col, net_col]):
+        raise ValueError(
+            f"Required columns not found in CSV. "
+            f"date_col={date_col} cat_col={cat_col} buy_col={buy_col} sell_col={sell_col} net_col={net_col} "
+            f"headers={fieldnames}"
+        )
 
     rows = list(reader)
     if not rows:
@@ -157,23 +226,28 @@ def _parse_csv(content: str) -> FiiDiiData:
 
     dated_rows = []
     for row in rows:
-        date_value = row.get(date_col, "").strip()
+        date_value = (row.get(date_col) or "").strip()
         parsed_date = _parse_date(date_value)
         dated_rows.append((parsed_date, date_value, row))
 
+    # Sort by parsed date; None dates go first
     dated_rows.sort(key=lambda item: (item[0] or datetime.min.date()))
     latest_parsed_date, latest_date_str, _ = dated_rows[-1]
 
     fii_row = None
     dii_row = None
+
     for parsed_date, original_date, row in dated_rows:
-        if parsed_date != latest_parsed_date and parsed_date is not None:
+        # Only match rows for latest date (if date exists). If date parse failed, keep scanning.
+        if latest_parsed_date is not None and parsed_date != latest_parsed_date:
             continue
-        participant = _normalize_header(row.get(client_col, ""))
-        if not fii_row and ("fii" in participant or "fpi" in participant):
+
+        participant = _normalize_header(row.get(cat_col, ""))
+        # NSE uses "FII/FPI"
+        if fii_row is None and ("fii" in participant or "fpi" in participant):
             fii_row = row
             latest_date_str = original_date or latest_date_str
-        if not dii_row and "dii" in participant:
+        if dii_row is None and "dii" in participant:
             dii_row = row
             latest_date_str = original_date or latest_date_str
 
@@ -195,10 +269,10 @@ def _parse_csv(content: str) -> FiiDiiData:
     )
 
     logging.info(
-        "Parsed NSE FII/DII data as_on=%s fii_found=%s dii_found=%s",
+        "Parsed NSE FII/DII data as_on=%s fii_net=%s dii_net=%s",
         data.as_on,
-        data.fii is not None,
-        data.dii is not None,
+        data.fii.net if data.fii else None,
+        data.dii.net if data.dii else None,
     )
 
     return data
@@ -212,8 +286,11 @@ def _fetch_fresh_data() -> FiiDiiData:
     for attempt in range(retries + 1):
         start_time = time.monotonic()
         response = None
+
         try:
             logging.info("Starting NSE FII/DII fetch attempt=%s", attempt + 1)
+
+            # Warm-ups (root might 403; keep going)
             warm_home = session.get(BASE_PAGE, timeout=10)
             logging.info(
                 "NSE warm-up root status=%s bytes=%s",
@@ -230,17 +307,20 @@ def _fetch_fresh_data() -> FiiDiiData:
                 len(warm_resp.content or b""),
             )
             if warm_resp.status_code != 200:
-                raise ValueError(
-                    f"Unexpected report warm-up status={warm_resp.status_code}"
-                )
+                raise ValueError(f"Unexpected report warm-up status={warm_resp.status_code}")
+
             api_headers = {
                 **session.headers,
+                # This matters: force CSV accept for API call
                 "Accept": "text/csv,*/*;q=0.9",
                 "Referer": REPORT_PAGE,
             }
+
             response = session.get(CSV_API_URL, headers=api_headers, timeout=10)
+
             duration = time.monotonic() - start_time
             content_length = len(response.content or b"")
+
             logging.info(
                 "NSE FII/DII fetch attempt=%s status=%s bytes=%s duration=%.3fs",
                 attempt + 1,
@@ -248,11 +328,13 @@ def _fetch_fresh_data() -> FiiDiiData:
                 content_length,
                 duration,
             )
-            decoded_text = _decode_response_content(response)
+
             if response.status_code in (403, 429):
                 raise ValueError(
                     f"Unexpected response status={response.status_code} length={content_length}"
                 )
+
+            decoded_text = _decode_response_content(response)
 
             try:
                 return _parse_csv(decoded_text)
@@ -270,15 +352,15 @@ def _fetch_fresh_data() -> FiiDiiData:
                     parse_exc,
                 )
                 raise
+
         except Exception as exc:  # noqa: BLE001
             duration = time.monotonic() - start_time
             status = response.status_code if response is not None else "no-response"
-            content_type = (
-                response.headers.get("content-type") if response is not None else "unknown"
-            )
+            content_type = response.headers.get("content-type") if response is not None else "unknown"
             content_length = len(response.content or b"") if response is not None else 0
             decoded_text = _decode_response_content(response) if response is not None else ""
             preview = _safe_preview(decoded_text)
+
             logging.warning(
                 "NSE FII/DII fetch failed attempt=%s duration=%.3fs status=%s content_type=%s bytes=%s preview=%s error=%s",
                 attempt + 1,
@@ -289,6 +371,7 @@ def _fetch_fresh_data() -> FiiDiiData:
                 preview,
                 exc,
             )
+
             if attempt < retries:
                 time.sleep(delay)
                 delay *= 3
