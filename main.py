@@ -1,5 +1,3 @@
-# main.py
-
 import asyncio
 import fcntl
 import logging
@@ -8,7 +6,6 @@ import tempfile
 import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -16,7 +13,6 @@ import yfinance as yf
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from db import ensure_template_table, seed_templates_if_empty
 from nse_fiidii import FiiDiiData, get_fii_dii_data
 from templates import classify_market, get_opening_line, initialize_templates_store
 
@@ -116,14 +112,12 @@ def format_report(report: MarketReport) -> str:
     if report.warning:
         lines.append(report.warning)
 
-    lines.extend(
-        [
-            "",
-            opening_line,
-            "",
-            "Market Indices Snapshot:",
-        ]
-    )
+    lines.extend([
+        "",
+        opening_line,
+        "",
+        "Market Indices Snapshot:",
+    ])
 
     for idx in report.indices:
         lines.append(
@@ -348,7 +342,9 @@ def _acquire_polling_lock() -> Optional[str]:
             handle.close()
             return existing_pid
     except Exception as exc:  # noqa: BLE001
-        logging.warning("Unable to check for concurrent pollers (best-effort) error=%s", exc)
+        logging.warning(
+            "Unable to check for concurrent pollers (best-effort) error=%s", exc
+        )
         return None
 
 
@@ -420,14 +416,6 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    # Create templates table + seed templates (only if empty). GitHub-controlled.
-    ensure_template_table()
-    seed_templates_if_empty(
-        seed_file=Path("db/seed_templates.sql"),
-        name="post_market_opening",
-    )
-
-    # Keep this if templates.py uses an in-memory fallback list.
     initialize_templates_store()
 
     if _POLLING_STARTED:
