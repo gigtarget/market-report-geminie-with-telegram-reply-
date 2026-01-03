@@ -1,6 +1,8 @@
 import asyncio
+import fcntl
 import logging
 import os
+import tempfile
 import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
@@ -23,6 +25,10 @@ INDEX_TICKERS: Dict[str, str] = {
     "Sensex": "^BSESN",
     "Nifty Bank": "^NSEBANK",
 }
+
+_POLLING_STARTED = False
+_POLLING_LOCK_HANDLE = None
+_POLLING_LOCK_PATH = os.path.join(tempfile.gettempdir(), "telegram_bot_poller.lock")
 
 
 @dataclass
@@ -295,6 +301,33 @@ def _get_cached_report() -> Optional[MarketReport]:
     return cached_report
 
 
+def _acquire_polling_lock() -> Optional[str]:
+    """Best-effort detection of concurrent pollers via a lock file."""
+
+    global _POLLING_LOCK_HANDLE
+
+    try:
+        handle = open(_POLLING_LOCK_PATH, "a+")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            handle.seek(0)
+            handle.truncate()
+            handle.write(str(os.getpid()))
+            handle.flush()
+            _POLLING_LOCK_HANDLE = handle
+            return None
+        except OSError:
+            handle.seek(0)
+            existing_pid = handle.read().strip() or "unknown"
+            handle.close()
+            return existing_pid
+    except Exception as exc:  # noqa: BLE001
+        logging.warning(
+            "Unable to check for concurrent pollers (best-effort) error=%s", exc
+        )
+        return None
+
+
 def fetch_market_report() -> MarketReport:
     try:
         report = _build_fresh_market_report()
@@ -356,20 +389,35 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 def main() -> None:
+    global _POLLING_STARTED
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    if _POLLING_STARTED:
+        raise RuntimeError("Telegram polling already running in this process")
+
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required")
 
+    other_pid = _acquire_polling_lock()
+    pid = os.getpid()
+    logging.info("Starting Telegram bot polling pid=%s", pid)
+    if other_pid:
+        logging.warning(
+            "Detected possible concurrent Telegram poller pid=%s lock_path=%s",
+            other_pid,
+            _POLLING_LOCK_PATH,
+        )
+
+    _POLLING_STARTED = True
+
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("report", report_command))
-
-    logging.info("Starting Telegram bot polling")
     application.run_polling(drop_pending_updates=True)
 
 
