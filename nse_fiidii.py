@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
+BASE_PAGE = "https://www.nseindia.com/"
 REPORT_PAGE = "https://www.nseindia.com/reports/fii-dii"
 CSV_API_URL = "https://www.nseindia.com/api/fiidiiTradeReact?csv=true"
 CACHE_TTL = timedelta(minutes=10)
@@ -17,11 +18,14 @@ _CACHE: Dict[str, Optional[object]] = {"data": None, "timestamp": None}
 _COMMON_HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif," "image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
     "Referer": REPORT_PAGE,
 }
+
+SAFE_PREVIEW_LENGTH = 200
 
 
 @dataclass
@@ -40,6 +44,24 @@ class FiiDiiData:
     from_cache: bool = False
 
 
+def _normalize_header(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
+def _safe_preview(text: str, length: int = SAFE_PREVIEW_LENGTH) -> str:
+    return (text or "")[:length].replace("\n", " ").replace("\r", " ").strip()
+
+
+def _validate_csv_payload(content: str) -> None:
+    snippet = (content or "").lstrip()
+    if not snippet:
+        raise ValueError("Empty response body from NSE")
+    if snippet.startswith("<"):
+        raise ValueError(f"Received HTML instead of CSV: {_safe_preview(snippet)}")
+    if snippet.startswith("{"):
+        raise ValueError(f"Received JSON instead of CSV: {_safe_preview(snippet)}")
+
+
 def _clean_float(value: str) -> Optional[float]:
     if value is None:
         return None
@@ -50,11 +72,18 @@ def _clean_float(value: str) -> Optional[float]:
 
 
 def _find_column(fieldnames: List[str], keywords: List[str]) -> Optional[str]:
-    lowered = [name.lower() for name in fieldnames]
-    for name in lowered:
-        if any(key.lower() in name for key in keywords):
-            return fieldnames[lowered.index(name)]
+    normalized_map = {_normalize_header(name): name for name in fieldnames}
+    for normalized, original in normalized_map.items():
+        for keyword in keywords:
+            if keyword.lower() in normalized:
+                return original
     return None
+
+
+def _create_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(_COMMON_HEADERS)
+    return session
 
 
 def _parse_date(value: str) -> Optional[date]:
@@ -67,15 +96,18 @@ def _parse_date(value: str) -> Optional[date]:
 
 
 def _parse_csv(content: str) -> FiiDiiData:
+    _validate_csv_payload(content)
+
     reader = csv.DictReader(io.StringIO(content))
-    if not reader.fieldnames:
+    fieldnames = reader.fieldnames or []
+    if not fieldnames:
         raise ValueError("CSV response missing header")
 
-    date_col = _find_column(reader.fieldnames, ["date"])
-    client_col = _find_column(reader.fieldnames, ["client", "category", "type"])
-    buy_col = _find_column(reader.fieldnames, ["buy"])
-    sell_col = _find_column(reader.fieldnames, ["sell"])
-    net_col = _find_column(reader.fieldnames, ["net"])
+    date_col = _find_column(fieldnames, ["date"])
+    client_col = _find_column(fieldnames, ["client", "category", "type"])
+    buy_col = _find_column(fieldnames, ["buy"])
+    sell_col = _find_column(fieldnames, ["sell"])
+    net_col = _find_column(fieldnames, ["net"])
 
     if not all([date_col, client_col, buy_col, sell_col, net_col]):
         raise ValueError("Required columns not found in CSV")
@@ -98,7 +130,7 @@ def _parse_csv(content: str) -> FiiDiiData:
     for parsed_date, original_date, row in dated_rows:
         if parsed_date != latest_parsed_date and parsed_date is not None:
             continue
-        participant = row.get(client_col, "").lower()
+        participant = _normalize_header(row.get(client_col, ""))
         if not fii_row and ("fii" in participant or "fpi" in participant):
             fii_row = row
             latest_date_str = original_date or latest_date_str
@@ -136,19 +168,30 @@ def _parse_csv(content: str) -> FiiDiiData:
 def _fetch_fresh_data() -> FiiDiiData:
     retries = 2
     delay = 0.5
-    session = requests.Session()
+    session = _create_session()
 
     for attempt in range(retries + 1):
         start_time = time.monotonic()
+        response = None
         try:
             logging.info("Starting NSE FII/DII fetch attempt=%s", attempt + 1)
-            warm_resp = session.get(REPORT_PAGE, headers=_COMMON_HEADERS, timeout=10)
+            warm_home = session.get(BASE_PAGE, timeout=10)
             logging.info(
-                "NSE warm-up status=%s bytes=%s",
+                "NSE warm-up root status=%s bytes=%s",
+                warm_home.status_code,
+                len(warm_home.content or b""),
+            )
+            warm_resp = session.get(REPORT_PAGE, timeout=10)
+            logging.info(
+                "NSE warm-up report status=%s bytes=%s",
                 warm_resp.status_code,
                 len(warm_resp.content or b""),
             )
-            api_headers = {"Accept": "text/csv,*/*;q=0.9", **_COMMON_HEADERS}
+            api_headers = {
+                **session.headers,
+                "Accept": "text/csv,*/*;q=0.9",
+                "Referer": REPORT_PAGE,
+            }
             response = session.get(CSV_API_URL, headers=api_headers, timeout=10)
             duration = time.monotonic() - start_time
             content_length = len(response.content or b"")
@@ -159,17 +202,41 @@ def _fetch_fresh_data() -> FiiDiiData:
                 content_length,
                 duration,
             )
-            if response.status_code in (403, 429) or not response.text.strip():
+            if response.status_code in (403, 429):
                 raise ValueError(
                     f"Unexpected response status={response.status_code} length={content_length}"
                 )
-            return _parse_csv(response.text)
+
+            try:
+                return _parse_csv(response.text)
+            except Exception as parse_exc:  # noqa: BLE001
+                preview = _safe_preview(response.text)
+                logging.warning(
+                    "NSE FII/DII parsing failed attempt=%s status=%s content_type=%s bytes=%s preview=%s error=%s",
+                    attempt + 1,
+                    response.status_code,
+                    response.headers.get("content-type"),
+                    content_length,
+                    preview,
+                    parse_exc,
+                )
+                raise
         except Exception as exc:  # noqa: BLE001
             duration = time.monotonic() - start_time
+            status = response.status_code if response is not None else "no-response"
+            content_type = (
+                response.headers.get("content-type") if response is not None else "unknown"
+            )
+            content_length = len(response.content or b"") if response is not None else 0
+            preview = _safe_preview(response.text if response is not None else "")
             logging.warning(
-                "NSE FII/DII fetch failed attempt=%s duration=%.3fs error=%s",
+                "NSE FII/DII fetch failed attempt=%s duration=%.3fs status=%s content_type=%s bytes=%s preview=%s error=%s",
                 attempt + 1,
                 duration,
+                status,
+                content_type,
+                content_length,
+                preview,
                 exc,
             )
             if attempt < retries:
