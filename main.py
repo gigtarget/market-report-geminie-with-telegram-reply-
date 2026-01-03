@@ -85,7 +85,7 @@ def _latest_session_date(data) -> date:
 
 
 def _fetch_index_snapshot(name: str, ticker: str) -> IndexSnapshot:
-    history = yf.Ticker(ticker).history(period="10d", interval="1d", tz="Asia/Kolkata")
+    history = yf.Ticker(ticker).history(period="10d", interval="1d")
 
     if history.empty:
         raise ValueError(f"No history returned for {ticker}")
@@ -119,7 +119,7 @@ def fetch_market_report() -> MarketReport:
         snapshot = _fetch_index_snapshot(name, ticker)
         snapshots.append(snapshot)
 
-        history = yf.Ticker(ticker).history(period="2d", interval="1d", tz="Asia/Kolkata")
+        history = yf.Ticker(ticker).history(period="2d", interval="1d")
         if history.empty:
             raise ValueError(f"Unable to determine session date for {ticker}")
         session_dates.append(_latest_session_date(history))
