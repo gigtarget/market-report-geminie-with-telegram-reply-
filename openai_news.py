@@ -51,12 +51,22 @@ def fetch_india_market_news_openai(now_ist: datetime) -> List[str]:
 
     output_text = ""
     try:
-        if hasattr(response, "output") and response.output:
-            first_block = response.output[0]
-            if hasattr(first_block, "content") and first_block.content:
-                first_content = first_block.content[0]
-                if hasattr(first_content, "text") and first_content.text:
-                    output_text = first_content.text
+        output_text = getattr(response, "output_text", "") or ""
+
+        if not output_text and hasattr(response, "output") and response.output:
+            collected: List[str] = []
+            item_types: List[str] = []
+            for item in response.output:
+                item_types.append(type(item).__name__)
+                contents = getattr(item, "content", None) or []
+                for content_item in contents:
+                    text_value = getattr(content_item, "text", None)
+                    if text_value:
+                        collected.append(text_value)
+            if collected:
+                output_text = "\n".join(collected)
+            elif item_types:
+                logging.debug("OpenAI response output types: %s", item_types)
     except Exception as exc:  # noqa: BLE001
         logging.warning("Unable to parse OpenAI response content: %s", exc)
 

@@ -603,6 +603,10 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    # Avoid logging Telegram request URLs that include the bot token.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     initialize_templates_store()
 
     if _POLLING_STARTED:
