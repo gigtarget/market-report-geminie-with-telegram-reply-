@@ -51,3 +51,4 @@ A production-ready Telegram bot that delivers the latest Indian market close dat
 - No AI is used for numbers; all values come directly from Yahoo Finance responses.
 - Timezone conversion uses Asia/Kolkata to display the correct session date.
 - If any index fetch fails, the bot replies with an apologetic error message instead of crashing.
+- If you ever suspect the Telegram token is leaked, revoke it in BotFather and update `TELEGRAM_BOT_TOKEN` with the new value immediately.
