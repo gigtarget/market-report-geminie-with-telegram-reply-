@@ -45,6 +45,7 @@ class FiiDiiData:
 
 
 def _normalize_header(value: str) -> str:
+    value = value or ""
     return " ".join(value.strip().lower().split())
 
 
@@ -59,9 +60,6 @@ def _validate_csv_payload(content: str) -> None:
     preview = _safe_preview(snippet)
     if snippet.startswith("<") or snippet.startswith("{"):
         raise ValueError(f"Unexpected NSE payload {preview}")
-    first_line = snippet.splitlines()[0]
-    if "," not in first_line:
-        raise ValueError(f"Unexpected NSE payload {preview}")
 
 
 def _clean_float(value: str) -> Optional[float]:
@@ -74,12 +72,28 @@ def _clean_float(value: str) -> Optional[float]:
 
 
 def _find_column(fieldnames: List[str], keywords: List[str]) -> Optional[str]:
-    normalized_map = {_normalize_header(name): name for name in fieldnames}
-    for normalized, original in normalized_map.items():
+    for name in fieldnames:
+        normalized = _normalize_header(name)
         for keyword in keywords:
             if keyword.lower() in normalized:
-                return original
+                return name
     return None
+
+
+def _find_value_column(fieldnames: List[str], keyword: str) -> Optional[str]:
+    best: Optional[str] = None
+    best_score = -1
+    for name in fieldnames:
+        normalized = _normalize_header(name)
+        if keyword.lower() not in normalized:
+            continue
+        score = 1
+        if "value" in normalized:
+            score += 1
+        if score > best_score:
+            best = name
+            best_score = score
+    return best
 
 
 def _create_session() -> requests.Session:
@@ -119,14 +133,20 @@ def _parse_csv(content: str) -> FiiDiiData:
 
     reader = csv.DictReader(io.StringIO(content))
     fieldnames = reader.fieldnames or []
+    normalized_fieldnames = [_normalize_header(name) for name in fieldnames]
+    if normalized_fieldnames:
+        reader.fieldnames = normalized_fieldnames
+        fieldnames = normalized_fieldnames
     if not fieldnames:
         raise ValueError("CSV response missing header")
 
     date_col = _find_column(fieldnames, ["date"])
-    client_col = _find_column(fieldnames, ["client", "category", "type"])
-    buy_col = _find_column(fieldnames, ["buy"])
-    sell_col = _find_column(fieldnames, ["sell"])
-    net_col = _find_column(fieldnames, ["net"])
+    client_col = _find_column(fieldnames, ["category"]) or _find_column(
+        fieldnames, ["type", "client"]
+    )
+    buy_col = _find_value_column(fieldnames, "buy")
+    sell_col = _find_value_column(fieldnames, "sell")
+    net_col = _find_value_column(fieldnames, "net")
 
     if not all([date_col, client_col, buy_col, sell_col, net_col]):
         raise ValueError("Required columns not found in CSV")
@@ -153,7 +173,7 @@ def _parse_csv(content: str) -> FiiDiiData:
         if not fii_row and ("fii" in participant or "fpi" in participant):
             fii_row = row
             latest_date_str = original_date or latest_date_str
-        if not dii_row and ("dii" in participant or "domestic" in participant):
+        if not dii_row and "dii" in participant:
             dii_row = row
             latest_date_str = original_date or latest_date_str
 
