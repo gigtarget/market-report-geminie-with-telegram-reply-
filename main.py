@@ -20,6 +20,7 @@ from news_dedupe import dedupe_similar, filter_seen, story_id_from_item
 from news_fetch import NewsItem, fetch_rss_items
 from news_filter import filter_by_session_time, relevance_filter
 from news_rank import TIER1_DOMAINS, rank_and_select
+from post_market_highlights import build_post_market_highlights
 from sent_store import SentStore
 from templates import classify_market, get_opening_line, initialize_templates_store
 
@@ -65,6 +66,8 @@ class MarketReport:
     news_india: List[NewsItem] | None = None
     news_global: List[NewsItem] | None = None
     news_warning: Optional[str] = None
+    liveblog_highlights: Optional[List[str]] = None
+    liveblog_warning: Optional[str] = None
 
 
 @dataclass
@@ -263,6 +266,15 @@ def format_report(report: MarketReport) -> str:
                 )
             else:
                 lines.append("DII data unavailable")
+
+    if report.liveblog_highlights is not None or report.liveblog_warning:
+        lines.extend(["", "Market Highlights (Moneycontrol live):"])
+        if report.liveblog_highlights:
+            lines.extend([f"• {highlight}" for highlight in report.liveblog_highlights])
+        elif report.liveblog_warning:
+            lines.append(report.liveblog_warning)
+        else:
+            lines.append("Highlights unavailable today.")
 
     lines.extend(["", "News (India-focused):"])
 
@@ -516,6 +528,7 @@ def _build_fresh_market_report() -> MarketReport:
     fii_dii_data, fii_dii_warning = get_fii_dii_data()
     top_gainers, bottom_performers, movers_warning = _fetch_top_movers()
     news_digest = _build_news_digest(now_ist, market_closed)
+    liveblog_highlights, liveblog_warning = build_post_market_highlights(now_ist)
 
     duration = time.monotonic() - start_time
     logging.info("Finished market report generation duration=%.3fs", duration)
@@ -534,6 +547,8 @@ def _build_fresh_market_report() -> MarketReport:
         news_india=news_digest.india_items,
         news_global=news_digest.global_items,
         news_warning=news_digest.warning,
+        liveblog_highlights=liveblog_highlights,
+        liveblog_warning=liveblog_warning,
     )
 
 
