@@ -8,8 +8,7 @@ from datetime import datetime, time
 from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from moneycontrol_liveblog import fetch_moneycontrol_liveblog
-from news_fetch import NewsItem
+from moneycontrol_liveblog import NewsItem, fetch_moneycontrol_liveblog
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -150,4 +149,3 @@ def build_post_market_highlights(now_ist: datetime) -> Tuple[Optional[List[str]]
         return None, "Highlights unavailable today."
 
     return bullets, None
-
