@@ -1,4 +1,5 @@
 import asyncio
+import csv
 import fcntl
 import logging
 import os
@@ -6,7 +7,8 @@ import tempfile
 import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
@@ -52,6 +54,18 @@ class MarketReport:
     warning: Optional[str] = None
     fii_dii: Optional[FiiDiiData] = None
     fii_dii_warning: Optional[str] = None
+    top_gainers: List["StockMover"] | None = None
+    bottom_performers: List["StockMover"] | None = None
+    movers_warning: Optional[str] = None
+
+
+@dataclass
+class StockMover:
+    symbol: str
+    close: float
+    previous_close: float
+    change: float
+    percent_change: float
 
 
 _REPORT_CACHE: Dict[str, Optional[object]] = {"report": None, "timestamp": None}
@@ -63,6 +77,49 @@ def _format_number(value: float) -> str:
 
 def _format_change(value: float) -> str:
     return f"{value:+,.2f}"
+
+
+def _load_nifty_100_tickers() -> Tuple[List[str], Optional[str]]:
+    csv_path = Path(__file__).with_name("ind_nifty100list.csv")
+    tickers: List[str] = []
+    warning: Optional[str] = None
+
+    try:
+        with csv_path.open(newline="", encoding="utf-8") as csv_file:
+            reader = csv.DictReader(csv_file)
+            if not reader.fieldnames:
+                warning = "NIFTY 100 list is empty or missing headers; skipping movers."
+                return [], warning
+
+            symbol_key = None
+            for field in reader.fieldnames:
+                if field and field.strip().lower() == "symbol":
+                    symbol_key = field
+                    break
+
+            if not symbol_key:
+                warning = "NIFTY 100 CSV does not contain a 'Symbol' column; skipping movers."
+                return [], warning
+
+            symbols = set()
+            for row in reader:
+                raw_symbol = row.get(symbol_key, "")
+                symbol = raw_symbol.strip().upper()
+                if symbol:
+                    symbols.add(symbol)
+
+            if not symbols:
+                warning = "NIFTY 100 list is empty; skipping movers."
+                return [], warning
+
+            tickers = [f"{symbol}.NS" for symbol in sorted(symbols)]
+    except FileNotFoundError:
+        warning = "NIFTY 100 list not found; skipping movers."
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("Failed to read NIFTY 100 list: %s", exc)
+        warning = "Unable to read NIFTY 100 list; skipping movers."
+
+    return tickers, warning
 
 
 def _determine_summary(indices: List[IndexSnapshot]) -> str:
@@ -124,6 +181,28 @@ def format_report(report: MarketReport) -> str:
             f"{idx.name}: {_format_number(idx.close)} "
             f"({_format_change(idx.change)} | {_format_change(idx.percent_change)}%)"
         )
+
+    lines.extend(["", "Top movers (NIFTY 100 | 1D %):"])
+
+    if report.movers_warning:
+        lines.append(report.movers_warning)
+
+    if report.top_gainers and report.bottom_performers:
+        lines.append("Top 5 Gainers:")
+        for mover in report.top_gainers:
+            lines.append(
+                f"• {mover.symbol}: {_format_number(mover.close)} "
+                f"({_format_change(mover.percent_change)}%)"
+            )
+
+        lines.append("Bottom 5 Performers:")
+        for mover in report.bottom_performers:
+            lines.append(
+                f"• {mover.symbol}: {_format_number(mover.close)} "
+                f"({_format_change(mover.percent_change)}%)"
+            )
+    else:
+        lines.append("Movers data unavailable.")
 
     if report.fii_dii or report.fii_dii_warning:
         lines.extend(["", "FII/DII (NSE):"])
@@ -260,6 +339,61 @@ def _fetch_history(ticker: str, period: str, interval: str):
     raise ValueError(f"No history returned for {ticker} after retries")
 
 
+def _build_stock_mover(ticker: str) -> Optional[StockMover]:
+    try:
+        history = _fetch_history(ticker, period="3d", interval="1d")
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("Skipping mover for %s: %s", ticker, exc)
+        return None
+
+    clean_history = history.dropna(subset=["Close"])
+    if len(clean_history) < 2:
+        logging.warning("Skipping mover for %s due to insufficient data", ticker)
+        return None
+
+    prev_close = float(clean_history.iloc[-2]["Close"])
+    close = float(clean_history.iloc[-1]["Close"])
+
+    if prev_close == 0:
+        logging.warning("Skipping mover for %s due to zero previous close", ticker)
+        return None
+
+    change = close - prev_close
+    percent_change = change / prev_close * 100
+    symbol = ticker.removesuffix(".NS")
+
+    return StockMover(
+        symbol=symbol,
+        close=close,
+        previous_close=prev_close,
+        change=change,
+        percent_change=percent_change,
+    )
+
+
+def _fetch_top_movers() -> Tuple[List[StockMover], List[StockMover], Optional[str]]:
+    tickers, warning = _load_nifty_100_tickers()
+
+    if not tickers:
+        return [], [], warning
+
+    movers: List[StockMover] = []
+    for ticker in tickers:
+        mover = _build_stock_mover(ticker)
+        if mover:
+            movers.append(mover)
+
+    if not movers:
+        fallback_warning = warning or "No movers data available; skipping movers."
+        return [], [], fallback_warning
+
+    sorted_movers = sorted(movers, key=lambda item: item.percent_change, reverse=True)
+    top_gainers = sorted_movers[:5]
+    bottom_performers = sorted(sorted_movers[-5:], key=lambda item: item.percent_change)
+
+    return top_gainers, bottom_performers, warning
+
+
 def _build_fresh_market_report() -> MarketReport:
     start_time = time.monotonic()
     logging.info("Starting market report generation for %s tickers", len(INDEX_TICKERS))
@@ -288,6 +422,7 @@ def _build_fresh_market_report() -> MarketReport:
     generated_at = datetime.now(timezone.utc)
 
     fii_dii_data, fii_dii_warning = get_fii_dii_data()
+    top_gainers, bottom_performers, movers_warning = _fetch_top_movers()
 
     duration = time.monotonic() - start_time
     logging.info("Finished market report generation duration=%.3fs", duration)
@@ -300,6 +435,9 @@ def _build_fresh_market_report() -> MarketReport:
         market_closed=market_closed,
         fii_dii=fii_dii_data,
         fii_dii_warning=fii_dii_warning,
+        top_gainers=top_gainers,
+        bottom_performers=bottom_performers,
+        movers_warning=movers_warning,
     )
 
 
