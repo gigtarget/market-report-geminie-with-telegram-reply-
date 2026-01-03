@@ -20,7 +20,7 @@ _COMMON_HEADERS = {
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
     "Referer": REPORT_PAGE,
 }
@@ -56,10 +56,12 @@ def _validate_csv_payload(content: str) -> None:
     snippet = (content or "").lstrip()
     if not snippet:
         raise ValueError("Empty response body from NSE")
-    if snippet.startswith("<"):
-        raise ValueError(f"Received HTML instead of CSV: {_safe_preview(snippet)}")
-    if snippet.startswith("{"):
-        raise ValueError(f"Received JSON instead of CSV: {_safe_preview(snippet)}")
+    preview = _safe_preview(snippet)
+    if snippet.startswith("<") or snippet.startswith("{"):
+        raise ValueError(f"Unexpected NSE payload {preview}")
+    first_line = snippet.splitlines()[0]
+    if "," not in first_line:
+        raise ValueError(f"Unexpected NSE payload {preview}")
 
 
 def _clean_float(value: str) -> Optional[float]:
@@ -84,6 +86,23 @@ def _create_session() -> requests.Session:
     session = requests.Session()
     session.headers.update(_COMMON_HEADERS)
     return session
+
+
+def _decode_response_content(response: requests.Response) -> str:
+    raw = response.content or b""
+    if not raw:
+        return ""
+
+    decoded = raw.decode("utf-8", errors="replace")
+    replacement_count = decoded.count("\ufffd")
+    if replacement_count:
+        replacement_ratio = replacement_count / max(len(decoded), 1)
+        if replacement_count > 10 and replacement_ratio > 0.02:
+            fallback = raw.decode("latin-1", errors="replace")
+            if fallback.count("\ufffd") < replacement_count:
+                decoded = fallback
+
+    return decoded
 
 
 def _parse_date(value: str) -> Optional[date]:
@@ -181,12 +200,19 @@ def _fetch_fresh_data() -> FiiDiiData:
                 warm_home.status_code,
                 len(warm_home.content or b""),
             )
+            if warm_home.status_code == 403:
+                logging.warning("NSE warm-up root returned 403; continuing")
+
             warm_resp = session.get(REPORT_PAGE, timeout=10)
             logging.info(
                 "NSE warm-up report status=%s bytes=%s",
                 warm_resp.status_code,
                 len(warm_resp.content or b""),
             )
+            if warm_resp.status_code != 200:
+                raise ValueError(
+                    f"Unexpected report warm-up status={warm_resp.status_code}"
+                )
             api_headers = {
                 **session.headers,
                 "Accept": "text/csv,*/*;q=0.9",
@@ -202,20 +228,23 @@ def _fetch_fresh_data() -> FiiDiiData:
                 content_length,
                 duration,
             )
+            decoded_text = _decode_response_content(response)
             if response.status_code in (403, 429):
                 raise ValueError(
                     f"Unexpected response status={response.status_code} length={content_length}"
                 )
 
             try:
-                return _parse_csv(response.text)
+                return _parse_csv(decoded_text)
             except Exception as parse_exc:  # noqa: BLE001
-                preview = _safe_preview(response.text)
+                preview = _safe_preview(decoded_text)
                 logging.warning(
-                    "NSE FII/DII parsing failed attempt=%s status=%s content_type=%s bytes=%s preview=%s error=%s",
+                    "NSE FII/DII parsing failed attempt=%s status=%s content_type=%s content_encoding=%s "
+                    "bytes=%s preview=%s error=%s",
                     attempt + 1,
                     response.status_code,
                     response.headers.get("content-type"),
+                    response.headers.get("content-encoding"),
                     content_length,
                     preview,
                     parse_exc,
@@ -228,7 +257,8 @@ def _fetch_fresh_data() -> FiiDiiData:
                 response.headers.get("content-type") if response is not None else "unknown"
             )
             content_length = len(response.content or b"") if response is not None else 0
-            preview = _safe_preview(response.text if response is not None else "")
+            decoded_text = _decode_response_content(response) if response is not None else ""
+            preview = _safe_preview(decoded_text)
             logging.warning(
                 "NSE FII/DII fetch failed attempt=%s duration=%.3fs status=%s content_type=%s bytes=%s preview=%s error=%s",
                 attempt + 1,
