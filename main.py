@@ -16,10 +16,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from nse_fiidii import FiiDiiData, get_fii_dii_data
-from news_dedupe import dedupe_similar, filter_seen, story_id_from_item
-from news_fetch import NewsItem, fetch_rss_items
-from news_filter import filter_by_session_time, relevance_filter
-from news_rank import TIER1_DOMAINS, rank_and_select
+from news_et import get_et_market_articles, get_relevant_market_news
 from post_market_highlights import build_post_market_highlights
 from sent_store import SentStore
 from templates import classify_market, get_opening_line, initialize_templates_store
@@ -63,8 +60,7 @@ class MarketReport:
     top_gainers: List["StockMover"] | None = None
     bottom_performers: List["StockMover"] | None = None
     movers_warning: Optional[str] = None
-    news_india: List[NewsItem] | None = None
-    news_global: List[NewsItem] | None = None
+    news_lines: List[str] | None = None
     news_warning: Optional[str] = None
     liveblog_highlights: Optional[List[str]] = None
     liveblog_warning: Optional[str] = None
@@ -81,8 +77,7 @@ class StockMover:
 
 @dataclass
 class NewsDigest:
-    india_items: List[NewsItem]
-    global_items: List[NewsItem]
+    lines: List[str]
     warning: Optional[str] = None
 
 
@@ -95,12 +90,6 @@ def _format_number(value: float) -> str:
 
 def _format_change(value: float) -> str:
     return f"{value:+,.2f}"
-
-
-def _truncate(text: str, limit: int = 170) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
 
 
 def _load_nifty_100_tickers() -> Tuple[List[str], Optional[str]]:
@@ -276,32 +265,15 @@ def format_report(report: MarketReport) -> str:
         else:
             lines.append("Highlights unavailable today.")
 
-    lines.extend(["", "News (India-focused):"])
+    lines.extend(["", "News (Post-market highlights):"])
 
     if report.news_warning:
         lines.append(report.news_warning)
 
-    if report.news_india:
-        for item in report.news_india:
-            if item.summary:
-                summary_text = _truncate(item.summary, 175)
-                bullet = f"• {item.title} — {summary_text} ({item.source_domain})"
-            else:
-                bullet = f"• {item.title} ({item.source_domain})"
-            lines.append(bullet)
-    else:
-        lines.append("No India-focused news available.")
-
-    if report.news_global:
-        lines.append("")
-        lines.append("Global add-ons (India-linked):")
-        for item in report.news_global:
-            if item.summary:
-                summary_text = _truncate(item.summary, 175)
-                bullet = f"• {item.title} — {summary_text} ({item.source_domain})"
-            else:
-                bullet = f"• {item.title} ({item.source_domain})"
-            lines.append(bullet)
+    if report.news_lines:
+        lines.extend([f"• {line}" for line in report.news_lines])
+    elif not report.news_warning:
+        lines.append("No news highlights available.")
 
     return "\n".join(lines)
 
@@ -458,43 +430,24 @@ def _build_news_digest(now_ist: datetime, market_closed: bool) -> NewsDigest:
     sent_store = SentStore()
     warning: Optional[str] = None
     try:
-        fetched = fetch_rss_items()
+        fetched = get_et_market_articles(limit=30)
         if not fetched:
-            return NewsDigest([], [], "No news fetched from sources.")
+            return NewsDigest([], "No news fetched from sources.")
 
-        time_filtered = filter_by_session_time(fetched, now_ist, market_closed)
-        with_ids = [(item, story_id_from_item(item)) for item in time_filtered]
-        cross_day_filtered = filter_seen(with_ids, sent_store)
-
-        relevance_candidates = [pair[0] for pair in cross_day_filtered]
-        india_items, global_candidates, relevance_warning = relevance_filter(
-            relevance_candidates, now_ist
+        lines, story_ids = get_relevant_market_news(
+            fetched, sent_store, top_n=30, relevant_n=5
         )
-        if relevance_warning and not warning:
-            warning = relevance_warning
 
-        india_pairs = [(item, story_id_from_item(item)) for item in india_items]
-        global_pairs = [(item, story_id_from_item(item)) for item in global_candidates]
+        if story_ids:
+            sent_store.mark_many(story_ids)
 
-        india_pairs = dedupe_similar(india_pairs, TIER1_DOMAINS)
-        global_pairs = dedupe_similar(global_pairs, TIER1_DOMAINS)
+        if not lines:
+            warning = "No news highlights available right now."
 
-        ranked_india, ranked_global = rank_and_select(india_pairs, global_pairs, now_ist)
-
-        selected_story_ids = [story_id for _, story_id, _ in ranked_india + ranked_global]
-        if selected_story_ids:
-            sent_store.mark_many(selected_story_ids)
-
-        india_final = [item for item, _, _ in ranked_india]
-        global_final = [item for item, _, _ in ranked_global]
-
-        if not india_final:
-            warning = warning or "No India-focused news passed filters."
-
-        return NewsDigest(india_final, global_final, warning)
+        return NewsDigest(lines, warning)
     except Exception as exc:  # noqa: BLE001
         logging.warning("News pipeline failed: %s", exc)
-        return NewsDigest([], [], warning or "News unavailable right now.")
+        return NewsDigest([], warning or "News unavailable right now.")
 
 
 def _build_fresh_market_report() -> MarketReport:
@@ -544,8 +497,7 @@ def _build_fresh_market_report() -> MarketReport:
         top_gainers=top_gainers,
         bottom_performers=bottom_performers,
         movers_warning=movers_warning,
-        news_india=news_digest.india_items,
-        news_global=news_digest.global_items,
+        news_lines=news_digest.lines,
         news_warning=news_digest.warning,
         liveblog_highlights=liveblog_highlights,
         liveblog_warning=liveblog_warning,
