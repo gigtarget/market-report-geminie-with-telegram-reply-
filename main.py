@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from nse_fiidii import FiiDiiData, get_fii_dii_data
 from news_dedupe import dedupe_similar, filter_seen, story_id_from_item
 from news_fetch import NewsItem, fetch_rss_items
-from news_filter import filter_by_time, relevance_filter
+from news_filter import filter_by_session_time, relevance_filter
 from news_rank import TIER1_DOMAINS, rank_and_select
 from sent_store import SentStore
 from templates import classify_market, get_opening_line, initialize_templates_store
@@ -92,6 +92,12 @@ def _format_number(value: float) -> str:
 
 def _format_change(value: float) -> str:
     return f"{value:+,.2f}"
+
+
+def _truncate(text: str, limit: int = 170) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 def _load_nifty_100_tickers() -> Tuple[List[str], Optional[str]]:
@@ -265,9 +271,11 @@ def format_report(report: MarketReport) -> str:
 
     if report.news_india:
         for item in report.news_india:
-            bullet = f"• {item.title} ({item.source_domain})"
-            if item.link:
-                bullet = f"{bullet} - {item.link}"
+            if item.summary:
+                summary_text = _truncate(item.summary, 175)
+                bullet = f"• {item.title} — {summary_text} ({item.source_domain})"
+            else:
+                bullet = f"• {item.title} ({item.source_domain})"
             lines.append(bullet)
     else:
         lines.append("No India-focused news available.")
@@ -276,9 +284,11 @@ def format_report(report: MarketReport) -> str:
         lines.append("")
         lines.append("Global add-ons (India-linked):")
         for item in report.news_global:
-            bullet = f"• {item.title} ({item.source_domain})"
-            if item.link:
-                bullet = f"{bullet} - {item.link}"
+            if item.summary:
+                summary_text = _truncate(item.summary, 175)
+                bullet = f"• {item.title} — {summary_text} ({item.source_domain})"
+            else:
+                bullet = f"• {item.title} ({item.source_domain})"
             lines.append(bullet)
 
     return "\n".join(lines)
@@ -432,7 +442,7 @@ def _fetch_top_movers() -> Tuple[List[StockMover], List[StockMover], Optional[st
     return top_gainers, bottom_performers, warning
 
 
-def _build_news_digest(now_ist: datetime) -> NewsDigest:
+def _build_news_digest(now_ist: datetime, market_closed: bool) -> NewsDigest:
     sent_store = SentStore()
     warning: Optional[str] = None
     try:
@@ -440,7 +450,7 @@ def _build_news_digest(now_ist: datetime) -> NewsDigest:
         if not fetched:
             return NewsDigest([], [], "No news fetched from sources.")
 
-        time_filtered = filter_by_time(fetched, now_ist)
+        time_filtered = filter_by_session_time(fetched, now_ist, market_closed)
         with_ids = [(item, story_id_from_item(item)) for item in time_filtered]
         cross_day_filtered = filter_seen(with_ids, sent_store)
 
@@ -505,7 +515,7 @@ def _build_fresh_market_report() -> MarketReport:
 
     fii_dii_data, fii_dii_warning = get_fii_dii_data()
     top_gainers, bottom_performers, movers_warning = _fetch_top_movers()
-    news_digest = _build_news_digest(now_ist)
+    news_digest = _build_news_digest(now_ist, market_closed)
 
     duration = time.monotonic() - start_time
     logging.info("Finished market report generation duration=%.3fs", duration)
