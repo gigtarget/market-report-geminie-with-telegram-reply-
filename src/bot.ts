@@ -1,4 +1,5 @@
-import { Bot, Context } from 'grammy';
+import { Bot, Context, webhookCallback } from 'grammy';
+import type { FastifyInstance } from 'fastify';
 import { run, RunnerHandle } from '@grammyjs/runner';
 import { readFile } from 'fs/promises';
 import { config, logger } from './config.js';
@@ -160,7 +161,7 @@ export async function sendTelegramMessage(markdown: string): Promise<void> {
   }
 }
 
-export async function initBot(): Promise<void> {
+export async function initBot(app?: FastifyInstance): Promise<void> {
   if (!config.telegramToken) {
     logger.info('Telegram bot token not set; bot disabled');
     return;
@@ -201,8 +202,23 @@ export async function initBot(): Promise<void> {
     return;
   }
 
+  const useWebhook = Boolean(config.telegramWebhookUrl && app);
+
+  if (useWebhook) {
+    const callback = webhookCallback(botInstance, 'fastify');
+    const webhookUrl = new URL(config.telegramWebhookUrl!);
+
+    app!.post(webhookUrl.pathname, async (request, reply) => callback(request, reply));
+
+    await botInstance.api.setWebhook(config.telegramWebhookUrl!);
+    logger.info({ webhookPath: webhookUrl.pathname }, 'Telegram bot initialized via webhook');
+    return;
+  }
+
+  await botInstance.api.deleteWebhook({ drop_pending_updates: false });
+
   runner = run(botInstance);
-  logger.info('Telegram bot initialized');
+  logger.info('Telegram bot initialized with long polling');
 }
 
 export function stopBot(): void {

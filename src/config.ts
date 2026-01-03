@@ -11,6 +11,7 @@ export const config = {
   geminiModel: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash',
   telegramToken: process.env.TELEGRAM_BOT_TOKEN,
   telegramChatId: process.env.TELEGRAM_CHAT_ID,
+  telegramWebhookUrl: process.env.TELEGRAM_WEBHOOK_URL,
 };
 
 export const loggerOptions = {
