@@ -2,6 +2,7 @@
 
 A production-ready Telegram bot that delivers the latest Indian market close data for Nifty 50, Sensex, and Nifty Bank. Data is pulled directly from Yahoo Finance via `yfinance`, and the bot replies with a formatted report when users send `/report`.
 
+
 ## Features
 - `/start` for quick usage help.
 - `/report` fetches the most recent trading session close from Yahoo Finance (no hardcoded dates).
