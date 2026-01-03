@@ -14,19 +14,24 @@ A production-ready Telegram bot that delivers the latest Indian market close dat
 ## Requirements
 - Python 3.11+
 - `TELEGRAM_BOT_TOKEN` environment variable set to your BotFather token.
+- `OPENAI_API_KEY` configured for news generation (Responses API with web search).
 
 ## Setup
 1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+ ```bash
+  pip install -r requirements.txt
+  ```
 2. Export your Telegram token:
+  ```bash
+  export TELEGRAM_BOT_TOKEN=your_telegram_token
+  ```
+3. Export your OpenAI API key:
    ```bash
-   export TELEGRAM_BOT_TOKEN=your_telegram_token
+   export OPENAI_API_KEY=your_openai_key
    ```
-3. Run the bot locally:
-   ```bash
-   python main.py
+4. Run the bot locally:
+  ```bash
+  python main.py
    ```
    The bot will start polling and respond to `/start` and `/report`.
 
@@ -35,6 +40,7 @@ A production-ready Telegram bot that delivers the latest Indian market close dat
 2. Create a new Railway project from the repo.
 3. Set the environment variable in Railway:
    - `TELEGRAM_BOT_TOKEN`
+   - `OPENAI_API_KEY`
 4. Configure the start command:
    ```bash
    python main.py

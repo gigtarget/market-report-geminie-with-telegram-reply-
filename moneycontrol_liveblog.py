@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from html import unescape
 from html.parser import HTMLParser
@@ -12,9 +13,17 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from news_fetch import NewsItem
-
 IST = ZoneInfo("Asia/Kolkata")
+
+
+@dataclass
+class NewsItem:
+    title: str
+    link: str
+    source_domain: str
+    published_at: Optional[datetime]
+    category: str
+    summary: Optional[str] = None
 
 
 class _TextExtractor(HTMLParser):
@@ -155,4 +164,3 @@ def fetch_moneycontrol_liveblog(url: str, timeout: int = 10) -> List[NewsItem]:
 
     logging.info("Parsed %s liveblog blocks from %s", len(items), url)
     return items
-

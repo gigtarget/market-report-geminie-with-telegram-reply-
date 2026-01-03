@@ -5,4 +5,4 @@ requests>=2.31.0
 psycopg[binary]>=3.2.1
 redis>=5.0.4
 google-generativeai>=0.7.0
-feedparser>=6.0.11
+openai>=1.40.2

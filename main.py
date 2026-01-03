@@ -16,9 +16,8 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from nse_fiidii import FiiDiiData, get_fii_dii_data
-from news_et import get_et_market_articles, get_relevant_market_news
+from openai_news import fetch_india_market_news_openai
 from post_market_highlights import build_post_market_highlights
-from sent_store import SentStore
 from templates import classify_market, get_opening_line, initialize_templates_store
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -265,7 +264,7 @@ def format_report(report: MarketReport) -> str:
         else:
             lines.append("Highlights unavailable today.")
 
-    lines.extend(["", "News (Post-market highlights):"])
+    lines.extend(["", "News (Top 5):"])
 
     if report.news_warning:
         lines.append(report.news_warning)
@@ -427,27 +426,14 @@ def _fetch_top_movers() -> Tuple[List[StockMover], List[StockMover], Optional[st
 
 
 def _build_news_digest(now_ist: datetime, market_closed: bool) -> NewsDigest:
-    sent_store = SentStore()
-    warning: Optional[str] = None
     try:
-        fetched = get_et_market_articles(limit=30)
-        if not fetched:
-            return NewsDigest([], "No news fetched from sources.")
-
-        lines, story_ids = get_relevant_market_news(
-            fetched, sent_store, top_n=30, relevant_n=5
-        )
-
-        if story_ids:
-            sent_store.mark_many(story_ids)
-
+        lines = fetch_india_market_news_openai(now_ist)
         if not lines:
-            warning = "No news highlights available right now."
-
-        return NewsDigest(lines, warning)
+            return NewsDigest([], "News (Top 5): Unavailable (OpenAI web search error).")
+        return NewsDigest(lines, None)
     except Exception as exc:  # noqa: BLE001
-        logging.warning("News pipeline failed: %s", exc)
-        return NewsDigest([], warning or "News unavailable right now.")
+        logging.warning("OpenAI news fetch failed: %s", exc)
+        return NewsDigest([], "News (Top 5): Unavailable (OpenAI web search error).")
 
 
 def _build_fresh_market_report() -> MarketReport:
