@@ -169,10 +169,9 @@ def format_report(report: MarketReport) -> str:
         logging.warning("Falling back to summary line: %s", exc)
         opening_line = _determine_summary(report.indices)
 
+    generated_ist = report.generated_at_utc.astimezone(IST)
     lines = [
-        f"Generated at (UTC): {report.generated_at_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC",
-        f"Market session date (IST): {report.session_date.strftime('%A, %Y-%m-%d')}",
-        f"Data last timestamp (IST): {report.last_timestamp_ist.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+        f"Report generated (IST): {generated_ist.strftime('%A, %Y-%m-%d %H:%M:%S')}",
     ]
 
     if report.market_closed:
