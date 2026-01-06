@@ -31,6 +31,23 @@ INDEX_TICKERS: Dict[str, str] = {
     "Nifty Bank": "^NSEBANK",
 }
 
+# Extra context for the report (Yahoo Finance symbols).
+VIX_TICKER = "^INDIAVIX"  # INDIA VIX
+
+# NSE sector indices on Yahoo Finance (keep this list stable for consistent daily output).
+SECTOR_TICKERS: Dict[str, str] = {
+    "IT": "^CNXIT",
+    "PSU Banks": "^CNXPSUBANK",
+    "Private Banks": "^CNXPRIVAT",
+    "Realty": "^CNXREALTY",
+    "FMCG": "^CNXFMCG",
+    "Energy": "^CNXENERGY",
+    "Auto": "^CNXAUTO",
+    "Pharma": "^CNXPHARMA",
+    "Metal": "^CNXMETAL",
+    "Infra": "^CNXINFRA",
+}
+
 _POLLING_STARTED = False
 _POLLING_LOCK_HANDLE = None
 _POLLING_LOCK_PATH = os.path.join(tempfile.gettempdir(), "telegram_bot_poller.lock")
@@ -46,6 +63,18 @@ class IndexSnapshot:
 
 
 @dataclass
+class VixSnapshot:
+    value: float
+    percent_change: float
+
+
+@dataclass
+class SectorMove:
+    sector: str
+    percent_change: float
+
+
+@dataclass
 class MarketReport:
     session_date: date
     indices: List[IndexSnapshot]
@@ -54,6 +83,10 @@ class MarketReport:
     market_closed: bool
     from_cache: bool = False
     warning: Optional[str] = None
+    vix: Optional[VixSnapshot] = None
+    vix_warning: Optional[str] = None
+    sector_moves: Optional[List[SectorMove]] = None
+    sector_warning: Optional[str] = None
     fii_dii: Optional[FiiDiiData] = None
     fii_dii_warning: Optional[str] = None
     top_gainers: List["StockMover"] | None = None
@@ -147,6 +180,167 @@ def _determine_summary(indices: List[IndexSnapshot]) -> str:
     return "Major indices were little changed at the close."
 
 
+def _pct_change(close: float, prev_close: float) -> float:
+    if prev_close == 0:
+        return 0.0
+    return (close - prev_close) / prev_close * 100
+
+
+def _fetch_vix_snapshot() -> Tuple[Optional[VixSnapshot], Optional[str]]:
+    try:
+        history = _fetch_history(VIX_TICKER, period="6d", interval="1d")
+        clean = history.dropna(subset=["Close"])
+        if len(clean) < 2:
+            return None, "Volatility (INDIA VIX): unavailable."
+        close = float(clean.iloc[-1]["Close"])
+        prev_close = float(clean.iloc[-2]["Close"])
+        return VixSnapshot(value=close, percent_change=_pct_change(close, prev_close)), None
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("VIX fetch failed: %s", exc)
+        return None, "Volatility (INDIA VIX): unavailable."
+
+
+def _fetch_sector_moves() -> Tuple[Optional[List[SectorMove]], Optional[str]]:
+    moves: List[SectorMove] = []
+    failures = 0
+
+    for sector, ticker in SECTOR_TICKERS.items():
+        try:
+            history = _fetch_history(ticker, period="6d", interval="1d")
+            clean = history.dropna(subset=["Close"])
+            if len(clean) < 2:
+                failures += 1
+                continue
+            close = float(clean.iloc[-1]["Close"])
+            prev_close = float(clean.iloc[-2]["Close"])
+            moves.append(SectorMove(sector=sector, percent_change=_pct_change(close, prev_close)))
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            logging.warning("Sector fetch failed for %s (%s): %s", sector, ticker, exc)
+
+    if not moves:
+        return None, "Sector Trend: unavailable."
+
+    moves.sort(key=lambda item: item.percent_change, reverse=True)
+    warning = None
+    if failures:
+        warning = "Sector Trend: partial data (some sector indices unavailable)."
+    return moves, warning
+
+
+def _sector_trend_block(moves: Optional[List[SectorMove]], warning: Optional[str]) -> List[str]:
+    if warning:
+        return [warning]
+    if not moves:
+        return ["Sector Trend: unavailable."]
+
+    strength = [m.sector for m in moves if m.percent_change >= 0.50]
+    weakness = [m.sector for m in moves if m.percent_change <= -0.50]
+    neutral = [m.sector for m in moves if -0.50 < m.percent_change < 0.50]
+
+    def _fmt(items: List[str]) -> str:
+        return ", ".join(items[:6]) if items else "None"
+
+    return [
+        "Sector Trend:",
+        f"• Strength: {_fmt(strength)}",
+        f"• Weakness: {_fmt(weakness)}",
+        f"• Neutral: {_fmt(neutral)}",
+    ]
+
+
+def _weakest_sector(moves: Optional[List[SectorMove]]) -> Optional[str]:
+    if not moves:
+        return None
+    return sorted(moves, key=lambda item: item.percent_change)[0].sector
+
+
+def _vix_line(vix: Optional[VixSnapshot], warning: Optional[str]) -> str:
+    if warning:
+        return warning
+    if not vix:
+        return "Volatility (INDIA VIX): unavailable."
+    arrow = "↑" if vix.percent_change > 0 else "↓" if vix.percent_change < 0 else "→"
+    return f"Volatility (INDIA VIX): {vix.value:.2f} ({arrow} {vix.percent_change:+.2f}%)."
+
+
+def _market_structure_line(
+    report: "MarketReport",
+    weakest_sector: Optional[str],
+    vix: Optional[VixSnapshot],
+) -> str:
+    indices_pct = {idx.name: idx.percent_change for idx in report.indices}
+    nifty_pct = indices_pct.get("Nifty 50", 0.0)
+
+    # Breadth proxy (cheap but stable): movers vs losers, if available.
+    breadth_bias = "mixed"
+    if report.top_gainers and report.bottom_performers:
+        if len(report.bottom_performers) > len(report.top_gainers):
+            breadth_bias = "negative"
+        elif len(report.top_gainers) > len(report.bottom_performers):
+            breadth_bias = "positive"
+
+    fii_net = 0.0
+    if report.fii_dii and report.fii_dii.fii:
+        fii_net = float(report.fii_dii.fii.net)
+
+    flow_bias = "flat FII"
+    if fii_net > 0:
+        flow_bias = "FII buying"
+    elif fii_net < 0:
+        flow_bias = "FII selling"
+
+    vol_tag = ""
+    if vix:
+        if vix.percent_change >= 2.0:
+            vol_tag = " + volatility rising"
+        elif vix.percent_change <= -2.0:
+            vol_tag = " + volatility cooling"
+
+    if nifty_pct < 0 and fii_net < 0 and breadth_bias == "negative":
+        core = "Distribution day — weak close with FII selling and broad softness"
+    elif nifty_pct > 0 and fii_net > 0 and breadth_bias == "positive":
+        core = "Accumulation day — firm close with FII support and broad participation"
+    elif nifty_pct < 0:
+        core = "Soft day — sellers controlled into the close"
+    elif nifty_pct > 0:
+        core = "Constructive day — buyers defended the close"
+    else:
+        core = "Indecision day — rangebound close"
+
+    sector_tag = f"; key drag: {weakest_sector}" if weakest_sector else ""
+    return f"Market Structure: {core}{sector_tag} ({flow_bias}{vol_tag})."
+
+
+def _tomorrows_focus(report: "MarketReport", weakest_sector: Optional[str], vix: Optional[VixSnapshot]) -> List[str]:
+    bullets: List[str] = []
+
+    if weakest_sector:
+        bullets.append(f"{weakest_sector} follow-through or stabilization (sentiment driver).")
+
+    if report.bottom_performers:
+        biggest_loser = report.bottom_performers[0].symbol
+        bullets.append(f"{biggest_loser} follow-through (heavyweight pressure check).")
+
+    if report.fii_dii and report.fii_dii.fii:
+        fii_net = float(report.fii_dii.fii.net)
+        if fii_net < 0:
+            bullets.append("FII flow: watch if selling persists on dips / near support.")
+        elif fii_net > 0:
+            bullets.append("FII flow: watch if buying continues into strength.")
+        else:
+            bullets.append("FII flow: watch next update for direction.")
+
+    if vix and vix.percent_change >= 2.0 and len(bullets) < 3:
+        bullets.append("Volatility: rising VIX can amplify intraday swings.")
+
+    bullets = bullets[:3]
+    if not bullets:
+        return ["What to Watch Next Session:", "• Key sectors and heavyweight stocks for follow-through."]
+
+    return ["What to Watch Next Session:"] + [f"• {b}" for b in bullets]
+
+
 def format_report(report: MarketReport) -> str:
     opening_line: Optional[str]
     try:
@@ -192,6 +386,11 @@ def format_report(report: MarketReport) -> str:
             f"{idx.name}: {_format_number(idx.close)} "
             f"({_format_change(idx.change)} | {_format_change(idx.percent_change)}%)"
         )
+
+    weakest_sector = _weakest_sector(report.sector_moves)
+    lines.extend(["", _market_structure_line(report, weakest_sector, report.vix)])
+    lines.extend(["", *(_sector_trend_block(report.sector_moves, report.sector_warning))])
+    lines.extend(["", _vix_line(report.vix, report.vix_warning)])
 
     lines.extend(["", "Top movers (NIFTY 100 | 1D %):"])
 
@@ -262,6 +461,8 @@ def format_report(report: MarketReport) -> str:
             lines.append(report.liveblog_warning)
         else:
             lines.append("Highlights unavailable today.")
+
+    lines.extend(["", *(_tomorrows_focus(report, weakest_sector, report.vix))])
 
     lines.extend(["", "News (Top 5):"])
 
@@ -463,6 +664,9 @@ def _build_fresh_market_report() -> MarketReport:
 
     generated_at = datetime.now(timezone.utc)
 
+    vix_snapshot, vix_warning = _fetch_vix_snapshot()
+    sector_moves, sector_warning = _fetch_sector_moves()
+
     fii_dii_data, fii_dii_warning = get_fii_dii_data()
     top_gainers, bottom_performers, movers_warning = _fetch_top_movers()
     news_digest = _build_news_digest(now_ist, market_closed)
@@ -477,6 +681,10 @@ def _build_fresh_market_report() -> MarketReport:
         last_timestamp_ist=latest_ts_display,
         generated_at_utc=generated_at,
         market_closed=market_closed,
+        vix=vix_snapshot,
+        vix_warning=vix_warning,
+        sector_moves=sector_moves,
+        sector_warning=sector_warning,
         fii_dii=fii_dii_data,
         fii_dii_warning=fii_dii_warning,
         top_gainers=top_gainers,
