@@ -75,6 +75,26 @@ class SectorMove:
 
 
 @dataclass
+class BreadthSnapshot:
+    total: int
+    advances: int
+    declines: int
+    unchanged: int
+    coverage_note: Optional[str] = None
+
+
+@dataclass
+class KeyLevels:
+    name: str
+    method: str
+    pivot: float
+    r1: float
+    s1: float
+    r2: float
+    s2: float
+
+
+@dataclass
 class MarketReport:
     session_date: date
     indices: List[IndexSnapshot]
@@ -92,6 +112,9 @@ class MarketReport:
     top_gainers: List["StockMover"] | None = None
     bottom_performers: List["StockMover"] | None = None
     movers_warning: Optional[str] = None
+    breadth: Optional[BreadthSnapshot] = None
+    key_levels: Optional[Dict[str, KeyLevels]] = None
+    drivers: Optional[List[str]] = None
     news_lines: List[str] | None = None
     news_warning: Optional[str] = None
     liveblog_highlights: Optional[List[str]] = None
@@ -268,6 +291,12 @@ def _weakest_sector(moves: Optional[List[SectorMove]]) -> Optional[str]:
     return sorted(moves, key=lambda item: item.percent_change)[0].sector
 
 
+def _strongest_sector(moves: Optional[List[SectorMove]]) -> Optional[str]:
+    if not moves:
+        return None
+    return sorted(moves, key=lambda item: item.percent_change, reverse=True)[0].sector
+
+
 def _vix_line(vix: Optional[VixSnapshot], warning: Optional[str]) -> str:
     if warning:
         return warning
@@ -285,9 +314,13 @@ def _market_structure_line(
     indices_pct = {idx.name: idx.percent_change for idx in report.indices}
     nifty_pct = indices_pct.get("Nifty 50", 0.0)
 
-    # Breadth proxy (cheap but stable): movers vs losers, if available.
     breadth_bias = "mixed"
-    if report.top_gainers and report.bottom_performers:
+    if report.breadth:
+        if report.breadth.advances > report.breadth.declines:
+            breadth_bias = "positive"
+        elif report.breadth.advances < report.breadth.declines:
+            breadth_bias = "negative"
+    elif report.top_gainers and report.bottom_performers:
         if len(report.bottom_performers) > len(report.top_gainers):
             breadth_bias = "negative"
         elif len(report.top_gainers) > len(report.bottom_performers):
@@ -328,30 +361,159 @@ def _market_structure_line(
 def _tomorrows_focus(report: "MarketReport", weakest_sector: Optional[str], vix: Optional[VixSnapshot]) -> List[str]:
     bullets: List[str] = []
 
-    if weakest_sector:
-        bullets.append(f"{weakest_sector} follow-through or stabilization (sentiment driver).")
+    def _format_levels(levels: KeyLevels) -> str:
+        return (
+            f"If {levels.name} holds S1 (~{levels.s1:,.0f}) and reclaims Pivot (~{levels.pivot:,.0f})"
+            f" → bounce attempt toward R1 (~{levels.r1:,.0f}). If it breaks S1"
+            f" → watch S2 (~{levels.s2:,.0f})."
+        )
 
-    if report.bottom_performers:
-        biggest_loser = report.bottom_performers[0].symbol
-        bullets.append(f"{biggest_loser} follow-through (heavyweight pressure check).")
+    if report.key_levels:
+        nifty_levels = report.key_levels.get("Nifty 50")
+        bank_levels = report.key_levels.get("Nifty Bank")
 
-    if report.fii_dii and report.fii_dii.fii:
+        if nifty_levels:
+            bullets.append(_format_levels(nifty_levels))
+
+        if bank_levels:
+            bullets.append(
+                f"If {bank_levels.name} holds S1 and crosses Pivot → follow-through; below S1"
+                f" → weakness extends (R1: ~{bank_levels.r1:,.0f}, S2: ~{bank_levels.s2:,.0f})."
+            )
+
+    if report.fii_dii and report.fii_dii.fii and vix and len(bullets) < 3:
         fii_net = float(report.fii_dii.fii.net)
-        if fii_net < 0:
-            bullets.append("FII flow: watch if selling persists on dips / near support.")
-        elif fii_net > 0:
-            bullets.append("FII flow: watch if buying continues into strength.")
-        else:
-            bullets.append("FII flow: watch next update for direction.")
+        if fii_net < 0 and vix.percent_change > 0:
+            bullets.append("If FII stays net negative and VIX rises → expect choppy sell-on-rise.")
+        elif fii_net > 0 and vix.percent_change <= 0:
+            bullets.append("If FII buying holds and VIX stays calm → dips may keep getting bought.")
 
-    if vix and vix.percent_change >= 2.0 and len(bullets) < 3:
-        bullets.append("Volatility: rising VIX can amplify intraday swings.")
+    if len(bullets) < 3 and weakest_sector:
+        bullets.append(f"If {weakest_sector} stabilizes → broader tone could improve; further slide keeps pressure on.")
 
     bullets = bullets[:3]
     if not bullets:
         return ["What to Watch Next Session:", "• Key sectors and heavyweight stocks for follow-through."]
 
     return ["What to Watch Next Session:"] + [f"• {b}" for b in bullets]
+
+
+def _round_level(index_name: str, value: float) -> float:
+    base = 50
+    if index_name in ("Nifty Bank", "Sensex"):
+        base = 100
+    return round(value / base) * base
+
+
+def _compute_pivot_levels(name: str, history_df, market_closed: bool) -> Optional[KeyLevels]:
+    try:
+        clean = history_df.dropna(subset=["High", "Low", "Close"])
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("Pivot calc failed for %s: %s", name, exc)
+        return None
+
+    if clean.empty:
+        return None
+
+    if market_closed or len(clean) == 1:
+        latest_row = clean.iloc[-1]
+    else:
+        if len(clean) < 2:
+            return None
+        latest_row = clean.iloc[-2]
+
+    high = float(latest_row["High"])
+    low = float(latest_row["Low"])
+    close = float(latest_row["Close"])
+
+    pivot = (high + low + close) / 3
+    r1 = 2 * pivot - low
+    s1 = 2 * pivot - high
+    r2 = pivot + (high - low)
+    s2 = pivot - (high - low)
+
+    return KeyLevels(
+        name=name,
+        method="Prev-day pivots",
+        pivot=_round_level(name, pivot),
+        r1=_round_level(name, r1),
+        s1=_round_level(name, s1),
+        r2=_round_level(name, r2),
+        s2=_round_level(name, s2),
+    )
+
+
+def _build_key_levels(histories: Dict[str, object], market_closed: bool) -> Optional[Dict[str, KeyLevels]]:
+    levels: Dict[str, KeyLevels] = {}
+
+    for name, history in histories.items():
+        try:
+            pivots = _compute_pivot_levels(name, history, market_closed)
+            if pivots:
+                levels[name] = pivots
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Key level build failed for %s: %s", name, exc)
+
+    return levels or None
+
+
+def _build_drivers(report: "MarketReport", strongest_sector: Optional[str], weakest_sector: Optional[str]) -> List[str]:
+    drivers: List[str] = []
+
+    if weakest_sector:
+        drivers.append(f"{weakest_sector} was the biggest drag.")
+
+    if report.bottom_performers:
+        laggard = sorted(report.bottom_performers, key=lambda item: item.percent_change)[0]
+        drivers.append(
+            f"{laggard.symbol} led the downside ({laggard.percent_change:+.2f}%)."
+        )
+
+    if report.fii_dii and report.fii_dii.fii:
+        fii_net = float(report.fii_dii.fii.net)
+        flow_tag = "buying" if fii_net > 0 else "selling" if fii_net < 0 else "flat"
+        drivers.append(f"FII net {flow_tag} (Net: {_format_number(fii_net)}).")
+
+    if len(drivers) < 3 and strongest_sector:
+        drivers.append(f"{strongest_sector} showed leadership.")
+
+    if len(drivers) < 3 and report.vix:
+        if report.vix.percent_change > 1.0:
+            drivers.append("Rising VIX increased swings.")
+        elif report.vix.percent_change < -1.0:
+            drivers.append("VIX easing kept moves controlled.")
+        else:
+            drivers.append("VIX flat kept moves controlled.")
+
+    return drivers[:3]
+
+
+def _build_day_summary(
+    report: "MarketReport",
+    weakest_sector: Optional[str],
+    strongest_sector: Optional[str],
+) -> List[str]:
+    lines: List[str] = []
+    lines.append(_market_structure_line(report, weakest_sector, report.vix))
+
+    flow_bits: List[str] = []
+    if report.fii_dii and report.fii_dii.fii:
+        fii_net = float(report.fii_dii.fii.net)
+        flow_state = "buying" if fii_net > 0 else "selling" if fii_net < 0 else "flat"
+        flow_bits.append(f"FII {flow_state} ({_format_number(fii_net)})")
+
+    if report.vix:
+        arrow = "↑" if report.vix.percent_change > 0 else "↓" if report.vix.percent_change < 0 else "→"
+        flow_bits.append(f"VIX {arrow} {report.vix.percent_change:+.2f}% ({report.vix.value:.2f})")
+    elif report.vix_warning:
+        flow_bits.append("VIX unavailable")
+
+    if flow_bits:
+        lines.append("Flows/Vol: " + " | ".join(flow_bits))
+    elif strongest_sector:
+        lines.append(f"Flows/Vol: data thin; note {strongest_sector} leadership focus.")
+
+    return lines[:2]
 
 
 def format_report(report: MarketReport) -> str:
@@ -377,6 +539,8 @@ def format_report(report: MarketReport) -> str:
         opening_line = _determine_summary(report.indices)
 
     generated_ist = report.generated_at_utc.astimezone(IST)
+    weakest_sector = _weakest_sector(report.sector_moves)
+    strongest_sector = _strongest_sector(report.sector_moves)
     lines = [
         f"Report generated (IST): {generated_ist.strftime('%A, %Y-%m-%d %H:%M:%S')}",
     ]
@@ -391,6 +555,61 @@ def format_report(report: MarketReport) -> str:
         "",
         opening_line,
         "",
+        "Day Summary:",
+    ])
+
+    day_summary = _build_day_summary(report, weakest_sector, strongest_sector)
+    if day_summary:
+        lines.extend([f"• {item}" for item in day_summary])
+    else:
+        lines.append("• Unavailable.")
+
+    lines.extend([
+        "",
+        "Market Health (NIFTY 100 breadth):",
+    ])
+    if report.breadth:
+        breadth_line = (
+            f"Adv: {report.breadth.advances} | Dec: {report.breadth.declines} | "
+            f"Unch: {report.breadth.unchanged}"
+        )
+        if report.breadth.coverage_note:
+            breadth_line += f" ({report.breadth.coverage_note})"
+        lines.append(breadth_line)
+    else:
+        lines.append("Breadth unavailable.")
+
+    lines.extend([
+        "",
+        "Key Levels (next session | prev-day pivots):",
+    ])
+    if report.key_levels:
+        printed_any = False
+        for key in ["Nifty 50", "Nifty Bank", "Sensex"]:
+            levels = report.key_levels.get(key)
+            if levels:
+                lines.append(
+                    f"{levels.name}: S1 {levels.s1:,.0f} | Pivot {levels.pivot:,.0f} | "
+                    f"R1 {levels.r1:,.0f} | S2 {levels.s2:,.0f} | R2 {levels.r2:,.0f}"
+                )
+                printed_any = True
+
+        for name, levels in report.key_levels.items():
+            if name in {"Nifty 50", "Nifty Bank", "Sensex"}:
+                continue
+            lines.append(
+                f"{levels.name}: S1 {levels.s1:,.0f} | Pivot {levels.pivot:,.0f} | "
+                f"R1 {levels.r1:,.0f} | S2 {levels.s2:,.0f} | R2 {levels.r2:,.0f}"
+            )
+            printed_any = True
+
+        if not printed_any:
+            lines.append("Key levels unavailable.")
+    else:
+        lines.append("Key levels unavailable.")
+
+    lines.extend([
+        "",
         "Market Indices Snapshot:",
     ])
 
@@ -400,10 +619,16 @@ def format_report(report: MarketReport) -> str:
             f"({_format_change(idx.change)} | {_format_change(idx.percent_change)}%)"
         )
 
-    weakest_sector = _weakest_sector(report.sector_moves)
     lines.extend(["", _market_structure_line(report, weakest_sector, report.vix)])
     lines.extend(["", *(_sector_trend_block(report.sector_moves, report.sector_warning))])
     lines.extend(["", _vix_line(report.vix, report.vix_warning)])
+
+    drivers = report.drivers or _build_drivers(report, strongest_sector, weakest_sector)
+    lines.extend(["", "Why market moved today (Top 3 drivers):"])
+    if drivers:
+        lines.extend([f"• {driver}" for driver in drivers])
+    else:
+        lines.append("Drivers unavailable.")
 
     lines.extend(["", "Top movers (NIFTY 100 | 1D %):"])
 
@@ -616,11 +841,11 @@ def _build_stock_mover(ticker: str) -> Optional[StockMover]:
     )
 
 
-def _fetch_top_movers() -> Tuple[List[StockMover], List[StockMover], Optional[str]]:
+def _fetch_top_movers() -> Tuple[List[StockMover], List[StockMover], Optional[BreadthSnapshot], Optional[str]]:
     tickers, warning = _load_nifty_100_tickers()
 
     if not tickers:
-        return [], [], warning
+        return [], [], None, warning
 
     movers: List[StockMover] = []
     for ticker in tickers:
@@ -630,13 +855,28 @@ def _fetch_top_movers() -> Tuple[List[StockMover], List[StockMover], Optional[st
 
     if not movers:
         fallback_warning = warning or "No movers data available; skipping movers."
-        return [], [], fallback_warning
+        return [], [], None, fallback_warning
 
     sorted_movers = sorted(movers, key=lambda item: item.percent_change, reverse=True)
     top_gainers = sorted_movers[:5]
     bottom_performers = sorted(sorted_movers[-5:], key=lambda item: item.percent_change)
+    eps = 0.0001
+    advances = sum(1 for mover in movers if mover.percent_change > eps)
+    declines = sum(1 for mover in movers if mover.percent_change < -eps)
+    unchanged = sum(1 for mover in movers if -eps <= mover.percent_change <= eps)
+    coverage_note = None
+    if len(movers) != len(tickers):
+        coverage_note = f"based on {len(movers)}/{len(tickers)} tickers fetched"
 
-    return top_gainers, bottom_performers, warning
+    breadth = BreadthSnapshot(
+        total=len(movers),
+        advances=advances,
+        declines=declines,
+        unchanged=unchanged,
+        coverage_note=coverage_note,
+    )
+
+    return top_gainers, bottom_performers, breadth, warning
 
 
 def _build_news_digest(now_ist: datetime, market_closed: bool) -> NewsDigest:
@@ -655,11 +895,13 @@ def _build_fresh_market_report() -> MarketReport:
     logging.info("Starting market report generation for %s tickers", len(INDEX_TICKERS))
 
     snapshots: List[IndexSnapshot] = []
+    histories: Dict[str, object] = {}
     session_dates: List[date] = []
     last_ts_candidates: List[datetime] = []
 
     for name, ticker in INDEX_TICKERS.items():
         history = _fetch_history(ticker, FETCH_PERIOD, FETCH_INTERVAL)
+        histories[name] = history
         snapshot = _snapshot_from_history(name, history)
         snapshots.append(snapshot)
 
@@ -682,14 +924,19 @@ def _build_fresh_market_report() -> MarketReport:
     sector_moves, sector_warning = _fetch_sector_moves()
 
     fii_dii_data, fii_dii_warning = get_fii_dii_data()
-    top_gainers, bottom_performers, movers_warning = _fetch_top_movers()
+    top_gainers, bottom_performers, breadth, movers_warning = _fetch_top_movers()
     news_digest = _build_news_digest(now_ist, market_closed)
     liveblog_highlights, liveblog_warning = build_post_market_highlights(now_ist)
+
+    key_levels = _build_key_levels(histories, market_closed)
+
+    weakest_sector = _weakest_sector(sector_moves)
+    strongest_sector = _strongest_sector(sector_moves)
 
     duration = time.monotonic() - start_time
     logging.info("Finished market report generation duration=%.3fs", duration)
 
-    return MarketReport(
+    report = MarketReport(
         session_date=report_date,
         indices=snapshots,
         last_timestamp_ist=latest_ts_display,
@@ -704,11 +951,19 @@ def _build_fresh_market_report() -> MarketReport:
         top_gainers=top_gainers,
         bottom_performers=bottom_performers,
         movers_warning=movers_warning,
+        breadth=breadth,
+        key_levels=key_levels,
         news_lines=news_digest.lines,
         news_warning=news_digest.warning,
         liveblog_highlights=liveblog_highlights,
         liveblog_warning=liveblog_warning,
     )
+
+    drivers = _build_drivers(report, strongest_sector, weakest_sector)
+    if drivers:
+        report = replace(report, drivers=drivers)
+
+    return report
 
 
 def _cache_report(report: MarketReport) -> None:
