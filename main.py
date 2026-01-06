@@ -388,8 +388,16 @@ def _tomorrows_focus(report: "MarketReport", weakest_sector: Optional[str], vix:
         elif fii_net > 0 and vix.percent_change <= 0:
             bullets.append("If FII buying holds and VIX stays calm → dips may keep getting bought.")
 
-    if len(bullets) < 3 and weakest_sector:
-        bullets.append(f"If {weakest_sector} stabilizes → broader tone could improve; further slide keeps pressure on.")
+    if len(bullets) < 3:
+        breadth_threshold = 60
+        if report.breadth and report.breadth.total:
+            breadth_threshold = max(1, int(round(max(60, report.breadth.total * 0.6))))
+
+        sector_focus = weakest_sector or "lagging sectors"
+        bullets.append(
+            f"If breadth improves (Adv ≥ {breadth_threshold}) AND {sector_focus} closes green"
+            " → tone improves; else sell-on-rise risk stays."
+        )
 
     bullets = bullets[:3]
     if not bullets:
@@ -583,6 +591,8 @@ def format_report(report: MarketReport) -> str:
         "",
         "Key Levels (next session | prev-day pivots):",
     ])
+    nifty_close = next((idx.close for idx in report.indices if idx.name == "Nifty 50"), None)
+
     if report.key_levels:
         printed_any = False
         for key in ["Nifty 50", "Nifty Bank", "Sensex"]:
@@ -608,6 +618,18 @@ def format_report(report: MarketReport) -> str:
     else:
         lines.append("Key levels unavailable.")
 
+    pivot_line = "Close vs Pivot: Nifty 50 pivot unavailable."
+    nifty_levels = report.key_levels.get("Nifty 50") if report.key_levels else None
+    if nifty_levels and nifty_close is not None:
+        position = "above" if nifty_close >= nifty_levels.pivot else "below"
+        bias = "constructive bias" if position == "above" else "cautious bias until reclaimed"
+        pivot_line = (
+            f"Close vs Pivot: Nifty 50 closed {position} Pivot (~{nifty_levels.pivot:,.0f})"
+            f" → {bias}."
+        )
+
+    lines.append(pivot_line)
+
     lines.extend([
         "",
         "Market Indices Snapshot:",
@@ -618,8 +640,6 @@ def format_report(report: MarketReport) -> str:
             f"{idx.name}: {_format_number(idx.close)} "
             f"({_format_change(idx.change)} | {_format_change(idx.percent_change)}%)"
         )
-
-    lines.extend(["", _market_structure_line(report, weakest_sector, report.vix)])
     lines.extend(["", *(_sector_trend_block(report.sector_moves, report.sector_warning))])
     lines.extend(["", _vix_line(report.vix, report.vix_warning)])
 

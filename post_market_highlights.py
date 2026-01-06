@@ -8,6 +8,8 @@ from datetime import datetime, time
 from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from openai import OpenAI
+
 from moneycontrol_liveblog import NewsItem, fetch_moneycontrol_liveblog
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -82,16 +84,13 @@ def _select_items(items: List[NewsItem]) -> List[NewsItem]:
     return ranked[:15]
 
 
-def _summarize_with_gemini(items: List[NewsItem]) -> List[str]:
-    import google.generativeai as genai
-
-    api_key = os.getenv("GEMINI_API_KEY")
+def _summarize_with_openai(items: List[NewsItem]) -> List[str]:
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
+        raise RuntimeError("OPENAI_API_KEY is not configured")
 
-    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name)
+    model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+    client = OpenAI(api_key=api_key)
 
     prompt_lines = [
         "You are summarizing Moneycontrol's Stock Market LIVE Updates for India equities.",
@@ -107,17 +106,38 @@ def _summarize_with_gemini(items: List[NewsItem]) -> List[str]:
         prompt_lines.append(f"{idx}. {item.title} — {body}")
 
     prompt = "\n".join(prompt_lines)
-    response = model.generate_content(prompt)
-    text = response.text if hasattr(response, "text") else ""
+
+    response = client.responses.create(
+        model=model,
+        input=[{"role": "user", "content": prompt}],
+    )
+
+    output_text = getattr(response, "output_text", "") or ""
+    if not output_text and hasattr(response, "output"):
+        collected: List[str] = []
+        item_types: List[str] = []
+        for item in response.output:  # type: ignore[attr-defined]
+            item_types.append(type(item).__name__)
+            contents = getattr(item, "content", None) or []
+            for content_item in contents:
+                text_value = getattr(content_item, "text", None)
+                if text_value:
+                    collected.append(text_value)
+        if collected:
+            output_text = "\n".join(collected)
+        elif item_types:
+            logging.debug("OpenAI response output types: %s", item_types)
 
     bullets: List[str] = []
-    for line in text.splitlines():
+    for line in output_text.splitlines():
         stripped = line.strip("•-* \t")
         if not stripped:
             continue
         bullets.append(stripped)
+        if len(bullets) >= 10:
+            break
 
-    return bullets[:10]
+    return bullets
 
 
 def build_post_market_highlights(now_ist: datetime) -> Tuple[Optional[List[str]], Optional[str]]:
@@ -140,9 +160,9 @@ def build_post_market_highlights(now_ist: datetime) -> Tuple[Optional[List[str]]
 
     selected = _select_items(filtered)
     try:
-        bullets = _summarize_with_gemini(selected)
+        bullets = _summarize_with_openai(selected)
     except Exception as exc:  # noqa: BLE001
-        logging.warning("Gemini summarization failed: %s", exc)
+        logging.warning("OpenAI summarization failed: %s", exc)
         return None, "Highlights unavailable today."
 
     if not bullets:

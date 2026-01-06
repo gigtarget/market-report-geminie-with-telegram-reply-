@@ -10,11 +10,11 @@ from typing import List
 from openai import OpenAI
 
 PROMPT = """
-You are writing a post-market news section for Indian stock market traders.
+You are writing a post-market news section for Indian equity traders.
 Using web search, return exactly 5 non-redundant items from the last 24 hours.
 Each bullet must be one line: “WHAT happened — WHY it matters”.
-Focus on India (NSE/BSE, Nifty/Sensex/Bank Nifty, RBI/SEBI, earnings, largecap moves). Avoid generic advice.
-No URLs, no citations, no extra text.
+Keep only market-moving catalysts: index/sector movers, RBI/Fed/CPI policy prints, results/guidance from largecaps, block deals/flows that moved stocks, or major upcoming catalysts.
+Exclude creator/compliance/education/distribution stories unless they visibly moved indices or a sector/stock. No URLs, no citations, no filler.
 """
 
 
