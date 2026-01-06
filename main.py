@@ -229,8 +229,7 @@ def _fetch_sector_moves() -> Tuple[Optional[List[SectorMove]], Optional[str]]:
 
 
 def _sector_trend_block(moves: Optional[List[SectorMove]], warning: Optional[str]) -> List[str]:
-    if warning:
-        return [warning]
+    # Always print whatever data we have (even if partial).
     if not moves:
         return ["Sector Trend: unavailable."]
 
@@ -241,12 +240,26 @@ def _sector_trend_block(moves: Optional[List[SectorMove]], warning: Optional[str
     def _fmt(items: List[str]) -> str:
         return ", ".join(items[:6]) if items else "None"
 
-    return [
-        "Sector Trend:",
+    lines: List[str] = []
+    # If partial, show a small note but still show the numbers.
+    if warning:
+        lines.append("Sector Trend: partial data (some sector indices unavailable).")
+    else:
+        lines.append("Sector Trend:")
+
+    lines.extend([
         f"• Strength: {_fmt(strength)}",
         f"• Weakness: {_fmt(weakness)}",
         f"• Neutral: {_fmt(neutral)}",
-    ]
+        "",
+        "Sector Moves (%):",
+    ])
+
+    # Print each sector with signed % (sorted already: strongest -> weakest)
+    for m in moves:
+        lines.append(f"• {m.sector}: {m.percent_change:+.2f}%")
+
+    return lines
 
 
 def _weakest_sector(moves: Optional[List[SectorMove]]) -> Optional[str]:
@@ -462,8 +475,6 @@ def format_report(report: MarketReport) -> str:
         else:
             lines.append("Highlights unavailable today.")
 
-    lines.extend(["", *(_tomorrows_focus(report, weakest_sector, report.vix))])
-
     lines.extend(["", "News (Top 5):"])
 
     if report.news_warning:
@@ -473,6 +484,9 @@ def format_report(report: MarketReport) -> str:
         lines.extend([f"• {line}" for line in report.news_lines])
     elif not report.news_warning:
         lines.append("No news highlights available.")
+
+    # Move "What to Watch" to the end of the report (after News).
+    lines.extend(["", *(_tomorrows_focus(report, weakest_sector, report.vix))])
 
     return "\n".join(lines)
 
