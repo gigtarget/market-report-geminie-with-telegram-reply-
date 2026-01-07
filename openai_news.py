@@ -9,12 +9,13 @@ from typing import List
 
 from openai import OpenAI
 
-PROMPT = """
+PROMPT_TEMPLATE = """
 You are writing a post-market news section for Indian equity traders.
-Using web search, return exactly 5 non-redundant items from the last 24 hours.
+Anchor the window to the Indian market session: from the last market close (IST) to now ({now_ist} IST).
+Using web search, return exactly 5 non-redundant items from this window.
+Prefer items that impacted today’s session movers/sectors.
 Each bullet must be one line: “WHAT happened — WHY it matters”.
-Keep only market-moving catalysts: index/sector movers, RBI/Fed/CPI policy prints, results/guidance from largecaps, block deals/flows that moved stocks, or major upcoming catalysts.
-Exclude creator/compliance/education/distribution stories unless they visibly moved indices or a sector/stock. No URLs, no citations, no filler.
+No predictions, no hype, no generic filler. Exclude creator/compliance/education/distribution stories unless they visibly moved indices or a sector/stock. No URLs, no citations.
 """
 
 
@@ -38,12 +39,13 @@ def fetch_india_market_news_openai(now_ist: datetime) -> List[str]:
         raise RuntimeError("OPENAI_API_KEY environment variable is required")
 
     client = OpenAI(api_key=api_key)
+    prompt = PROMPT_TEMPLATE.format(now_ist=now_ist.strftime("%Y-%m-%d %H:%M"))
 
     try:
         response = client.responses.create(
             model="gpt-5.2",
             tools=[{"type": "web_search"}],
-            input=[{"role": "user", "content": PROMPT}],
+            input=[{"role": "user", "content": prompt}],
         )
     except Exception as exc:  # noqa: BLE001
         logging.warning("OpenAI responses request failed: %s", exc)

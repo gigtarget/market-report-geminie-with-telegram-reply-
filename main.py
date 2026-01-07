@@ -147,6 +147,26 @@ def _format_change(value: float) -> str:
     return f"{value:+,.2f}"
 
 
+def _breadth_read_line(breadth: BreadthSnapshot) -> str:
+    adv = breadth.advances
+    dec = breadth.declines
+    if dec == 0:
+        ratio = float("inf")
+        ratio_display = "∞"
+    else:
+        ratio = adv / dec
+        ratio_display = f"{ratio:.2f}"
+
+    if ratio >= 1.25:
+        label = "mildly positive"
+    elif ratio >= 0.90:
+        label = "neutral"
+    else:
+        label = "weak"
+
+    return f"Breadth read: A/D = {adv}/{dec} ({ratio_display}) → {label} internals"
+
+
 def _load_nifty_100_tickers() -> Tuple[List[str], Optional[str]]:
     csv_path = Path(__file__).with_name("ind_nifty100list.csv")
     tickers: List[str] = []
@@ -225,36 +245,41 @@ def _fetch_vix_snapshot() -> Tuple[Optional[VixSnapshot], Optional[str]]:
 
 def _fetch_sector_moves() -> Tuple[Optional[List[SectorMove]], Optional[str]]:
     moves: List[SectorMove] = []
-    failures = 0
+    missing: List[str] = []
 
     for sector, ticker in SECTOR_TICKERS.items():
         try:
             history = _fetch_history(ticker, period="6d", interval="1d")
             clean = history.dropna(subset=["Close"])
             if len(clean) < 2:
-                failures += 1
+                missing.append(sector)
                 continue
             close = float(clean.iloc[-1]["Close"])
             prev_close = float(clean.iloc[-2]["Close"])
             moves.append(SectorMove(sector=sector, percent_change=_pct_change(close, prev_close)))
         except Exception as exc:  # noqa: BLE001
-            failures += 1
+            missing.append(sector)
             logging.warning("Sector fetch failed for %s (%s): %s", sector, ticker, exc)
 
+    total = len(SECTOR_TICKERS)
+    coverage_line = f"Sector coverage: {len(moves)}/{total}"
+    if missing:
+        coverage_line += f" (missing: {', '.join(missing)})"
+
     if not moves:
-        return None, "Sector Trend: unavailable."
+        return None, coverage_line
 
     moves.sort(key=lambda item: item.percent_change, reverse=True)
-    warning = None
-    if failures:
-        warning = "Sector Trend: partial data (some sector indices unavailable)."
-    return moves, warning
+    return moves, coverage_line
 
 
-def _sector_trend_block(moves: Optional[List[SectorMove]], warning: Optional[str]) -> List[str]:
+def _sector_trend_block(moves: Optional[List[SectorMove]], coverage_line: Optional[str]) -> List[str]:
     # Always print whatever data we have (even if partial).
     if not moves:
-        return ["Sector Trend: unavailable."]
+        lines = ["Sector Trend: unavailable."]
+        if coverage_line:
+            lines.append(coverage_line)
+        return lines
 
     strength = [m.sector for m in moves if m.percent_change >= 0.50]
     weakness = [m.sector for m in moves if m.percent_change <= -0.50]
@@ -264,11 +289,9 @@ def _sector_trend_block(moves: Optional[List[SectorMove]], warning: Optional[str
         return ", ".join(items[:6]) if items else "None"
 
     lines: List[str] = []
-    # If partial, show a small note but still show the numbers.
-    if warning:
-        lines.append("Sector Trend: partial data (some sector indices unavailable).")
-    else:
-        lines.append("Sector Trend:")
+    lines.append("Sector Trend:")
+    if coverage_line:
+        lines.append(coverage_line)
 
     lines.extend([
         f"• Strength: {_fmt(strength)}",
@@ -358,14 +381,19 @@ def _market_structure_line(
     return f"Market Structure: {core}{sector_tag} ({flow_bias}{vol_tag})."
 
 
-def _tomorrows_focus(report: "MarketReport", weakest_sector: Optional[str], vix: Optional[VixSnapshot]) -> List[str]:
+def _tomorrows_focus(report: "MarketReport", weakest_sector: Optional[str]) -> List[str]:
     bullets: List[str] = []
 
-    def _format_levels(levels: KeyLevels) -> str:
+    def _nifty_rule(levels: KeyLevels) -> str:
         return (
-            f"If {levels.name} holds S1 (~{levels.s1:,.0f}) and reclaims Pivot (~{levels.pivot:,.0f})"
-            f" → bounce attempt toward R1 (~{levels.r1:,.0f}). If it breaks S1"
-            f" → watch S2 (~{levels.s2:,.0f})."
+            f"Nifty rule: Hold S1 (~{levels.s1:,.0f}) and reclaim Pivot (~{levels.pivot:,.0f})"
+            f" → aim R1 (~{levels.r1:,.0f}); below S1 → watch S2 (~{levels.s2:,.0f})."
+        )
+
+    def _banknifty_rule(levels: KeyLevels) -> str:
+        return (
+            f"BankNifty rule: Hold S1 (~{levels.s1:,.0f}) and reclaim Pivot (~{levels.pivot:,.0f})"
+            f" → aim R1 (~{levels.r1:,.0f}); below S1 → watch S2 (~{levels.s2:,.0f})."
         )
 
     if report.key_levels:
@@ -373,33 +401,21 @@ def _tomorrows_focus(report: "MarketReport", weakest_sector: Optional[str], vix:
         bank_levels = report.key_levels.get("Nifty Bank")
 
         if nifty_levels:
-            bullets.append(_format_levels(nifty_levels))
-
+            bullets.append(_nifty_rule(nifty_levels))
         if bank_levels:
-            bullets.append(
-                f"If {bank_levels.name} holds S1 and crosses Pivot → follow-through; below S1"
-                f" → weakness extends (R1: ~{bank_levels.r1:,.0f}, S2: ~{bank_levels.s2:,.0f})."
-            )
+            bullets.append(_banknifty_rule(bank_levels))
 
-    if report.fii_dii and report.fii_dii.fii and vix and len(bullets) < 3:
-        fii_net = float(report.fii_dii.fii.net)
-        if fii_net < 0 and vix.percent_change > 0:
-            bullets.append("If FII stays net negative and VIX rises → expect choppy sell-on-rise.")
-        elif fii_net > 0 and vix.percent_change <= 0:
-            bullets.append("If FII buying holds and VIX stays calm → dips may keep getting bought.")
+    breadth_threshold = 60
+    if report.breadth and report.breadth.total:
+        breadth_threshold = max(1, int(round(max(60, report.breadth.total * 0.6))))
 
-    if len(bullets) < 3:
-        breadth_threshold = 60
-        if report.breadth and report.breadth.total:
-            breadth_threshold = max(1, int(round(max(60, report.breadth.total * 0.6))))
+    sector_focus = weakest_sector or "lagging sectors"
+    bullets.append(
+        f"Confirmation: Breadth (Adv ≥ {breadth_threshold}) and {sector_focus} turning green"
+        " → follow-through; else caution stays."
+    )
 
-        sector_focus = weakest_sector or "lagging sectors"
-        bullets.append(
-            f"If breadth improves (Adv ≥ {breadth_threshold}) AND {sector_focus} closes green"
-            " → tone improves; else sell-on-rise risk stays."
-        )
-
-    bullets = bullets[:3]
+    bullets = bullets[:5]
     if not bullets:
         return ["What to Watch Next Session:", "• Key sectors and heavyweight stocks for follow-through."]
 
@@ -465,33 +481,30 @@ def _build_key_levels(histories: Dict[str, object], market_closed: bool) -> Opti
     return levels or None
 
 
-def _build_drivers(report: "MarketReport", strongest_sector: Optional[str], weakest_sector: Optional[str]) -> List[str]:
+def _build_drivers(report: "MarketReport", weakest_sector: Optional[str]) -> List[str]:
     drivers: List[str] = []
 
     if weakest_sector:
-        drivers.append(f"{weakest_sector} was the biggest drag.")
+        drivers.append(f"Sector drag: {weakest_sector} was the biggest drag.")
 
     if report.bottom_performers:
         laggard = sorted(report.bottom_performers, key=lambda item: item.percent_change)[0]
         drivers.append(
-            f"{laggard.symbol} led the downside ({laggard.percent_change:+.2f}%)."
+            f"Stock drag: {laggard.symbol} led the downside ({laggard.percent_change:+.2f}%)."
         )
 
     if report.fii_dii and report.fii_dii.fii:
         fii_net = float(report.fii_dii.fii.net)
         flow_tag = "buying" if fii_net > 0 else "selling" if fii_net < 0 else "flat"
-        drivers.append(f"FII net {flow_tag} (Net: {_format_number(fii_net)}).")
-
-    if len(drivers) < 3 and strongest_sector:
-        drivers.append(f"{strongest_sector} showed leadership.")
+        drivers.append(f"Flows: FII net {flow_tag} (Net: {_format_number(fii_net)}).")
 
     if len(drivers) < 3 and report.vix:
         if report.vix.percent_change > 1.0:
-            drivers.append("Rising VIX increased swings.")
+            drivers.append("Macro: Rising VIX increased swings.")
         elif report.vix.percent_change < -1.0:
-            drivers.append("VIX easing kept moves controlled.")
+            drivers.append("Macro: VIX easing kept moves controlled.")
         else:
-            drivers.append("VIX flat kept moves controlled.")
+            drivers.append("Macro: VIX flat kept moves controlled.")
 
     return drivers[:3]
 
@@ -546,15 +559,13 @@ def format_report(report: MarketReport) -> str:
         logging.warning("Falling back to summary line: %s", exc)
         opening_line = _determine_summary(report.indices)
 
-    generated_ist = report.generated_at_utc.astimezone(IST)
     weakest_sector = _weakest_sector(report.sector_moves)
     strongest_sector = _strongest_sector(report.sector_moves)
+    if report.market_closed and opening_line.startswith("Market closed — showing last close"):
+        opening_line = _determine_summary(report.indices)
     lines = [
-        f"Report generated (IST): {generated_ist.strftime('%A, %Y-%m-%d %H:%M:%S')}",
+        f"Session (IST): {report.session_date.strftime('%Y-%m-%d')}",
     ]
-
-    if report.market_closed:
-        lines.append("Market closed — showing last close")
 
     if report.warning:
         lines.append(report.warning)
@@ -581,9 +592,10 @@ def format_report(report: MarketReport) -> str:
             f"Adv: {report.breadth.advances} | Dec: {report.breadth.declines} | "
             f"Unch: {report.breadth.unchanged}"
         )
-        if report.breadth.coverage_note:
-            breadth_line += f" ({report.breadth.coverage_note})"
+        coverage_note = report.breadth.coverage_note or "full"
+        breadth_line += f" | Coverage: {coverage_note}"
         lines.append(breadth_line)
+        lines.append(_breadth_read_line(report.breadth))
     else:
         lines.append("Breadth unavailable.")
 
@@ -643,7 +655,7 @@ def format_report(report: MarketReport) -> str:
     lines.extend(["", *(_sector_trend_block(report.sector_moves, report.sector_warning))])
     lines.extend(["", _vix_line(report.vix, report.vix_warning)])
 
-    drivers = report.drivers or _build_drivers(report, strongest_sector, weakest_sector)
+    drivers = report.drivers or _build_drivers(report, weakest_sector)
     lines.extend(["", "Why market moved today (Top 3 drivers):"])
     if drivers:
         lines.extend([f"• {driver}" for driver in drivers])
@@ -731,7 +743,7 @@ def format_report(report: MarketReport) -> str:
         lines.append("No news highlights available.")
 
     # Move "What to Watch" to the end of the report (after News).
-    lines.extend(["", *(_tomorrows_focus(report, weakest_sector, report.vix))])
+    lines.extend(["", *(_tomorrows_focus(report, weakest_sector))])
 
     return "\n".join(lines)
 
@@ -979,7 +991,7 @@ def _build_fresh_market_report() -> MarketReport:
         liveblog_warning=liveblog_warning,
     )
 
-    drivers = _build_drivers(report, strongest_sector, weakest_sector)
+    drivers = _build_drivers(report, weakest_sector)
     if drivers:
         report = replace(report, drivers=drivers)
 
