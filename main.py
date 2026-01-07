@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+import math
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -35,17 +36,17 @@ INDEX_TICKERS: Dict[str, str] = {
 VIX_TICKER = "^INDIAVIX"  # INDIA VIX
 
 # NSE sector indices on Yahoo Finance (keep this list stable for consistent daily output).
-SECTOR_TICKERS: Dict[str, str] = {
-    "IT": "^CNXIT",
-    "PSU Banks": "^CNXPSUBANK",
-    "Private Banks": "^CNXPRIVAT",
-    "Realty": "^CNXREALTY",
-    "FMCG": "^CNXFMCG",
-    "Energy": "^CNXENERGY",
-    "Auto": "^CNXAUTO",
-    "Pharma": "^CNXPHARMA",
-    "Metal": "^CNXMETAL",
-    "Infra": "^CNXINFRA",
+SECTOR_TICKERS: Dict[str, List[str]] = {
+    "IT": ["^CNXIT"],
+    "PSU Banks": ["^CNXPSUBANK"],
+    "Private Banks": ["^CNXPRIVAT", "^NIFTYPRIVAT"],
+    "Realty": ["^CNXREALTY"],
+    "FMCG": ["^CNXFMCG"],
+    "Energy": ["^CNXENERGY"],
+    "Auto": ["^CNXAUTO"],
+    "Pharma": ["^CNXPHARMA"],
+    "Metal": ["^CNXMETAL"],
+    "Infra": ["^CNXINFRA"],
 }
 
 _POLLING_STARTED = False
@@ -229,6 +230,10 @@ def _pct_change(close: float, prev_close: float) -> float:
     return (close - prev_close) / prev_close * 100
 
 
+def _normalize_sector_key(value: str) -> str:
+    return " ".join(value.split()).strip().lower()
+
+
 def _fetch_vix_snapshot() -> Tuple[Optional[VixSnapshot], Optional[str]]:
     try:
         history = _fetch_history(VIX_TICKER, period="6d", interval="1d")
@@ -244,25 +249,45 @@ def _fetch_vix_snapshot() -> Tuple[Optional[VixSnapshot], Optional[str]]:
 
 
 def _fetch_sector_moves() -> Tuple[Optional[List[SectorMove]], Optional[str]]:
-    moves: List[SectorMove] = []
+    expected_sectors = list(SECTOR_TICKERS.keys())
+    normalized_expected = {_normalize_sector_key(name): name for name in expected_sectors}
+    sector_returns: Dict[str, Optional[float]] = {name: None for name in expected_sectors}
     missing: List[str] = []
 
-    for sector, ticker in SECTOR_TICKERS.items():
-        try:
-            history = _fetch_history(ticker, period="6d", interval="1d")
-            clean = history.dropna(subset=["Close"])
-            if len(clean) < 2:
-                missing.append(sector)
-                continue
-            close = float(clean.iloc[-1]["Close"])
-            prev_close = float(clean.iloc[-2]["Close"])
-            moves.append(SectorMove(sector=sector, percent_change=_pct_change(close, prev_close)))
-        except Exception as exc:  # noqa: BLE001
-            missing.append(sector)
-            logging.warning("Sector fetch failed for %s (%s): %s", sector, ticker, exc)
+    for sector, tickers in SECTOR_TICKERS.items():
+        display_name = normalized_expected.get(_normalize_sector_key(sector), sector)
+        percent_change: Optional[float] = None
+        for ticker in tickers:
+            try:
+                history = _fetch_history(ticker, period="6d", interval="1d")
+                clean = history.dropna(subset=["Close"])
+                if len(clean) < 2:
+                    continue
+                close = float(clean.iloc[-1]["Close"])
+                prev_close = float(clean.iloc[-2]["Close"])
+                percent_change = _pct_change(close, prev_close)
+                break
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("Sector fetch failed for %s (%s): %s", sector, ticker, exc)
 
-    total = len(SECTOR_TICKERS)
-    coverage_line = f"Sector coverage: {len(moves)}/{total}"
+        if percent_change is None or not math.isfinite(percent_change):
+            missing.append(display_name)
+            sector_returns[display_name] = None
+        else:
+            sector_returns[display_name] = percent_change
+
+    moves = [
+        SectorMove(sector=sector, percent_change=percent_change)
+        for sector, percent_change in sector_returns.items()
+        if percent_change is not None and math.isfinite(percent_change)
+    ]
+
+    total = len(expected_sectors)
+    coverage_count = sum(
+        1 for percent_change in sector_returns.values()
+        if percent_change is not None and math.isfinite(percent_change)
+    )
+    coverage_line = f"Sector coverage: {coverage_count}/{total}"
     if missing:
         coverage_line += f" (missing: {', '.join(missing)})"
 
@@ -327,6 +352,11 @@ def _vix_line(vix: Optional[VixSnapshot], warning: Optional[str]) -> str:
         return "Volatility (INDIA VIX): unavailable."
     arrow = "↑" if vix.percent_change > 0 else "↓" if vix.percent_change < 0 else "→"
     return f"Volatility (INDIA VIX): {vix.value:.2f} ({arrow} {vix.percent_change:+.2f}%)."
+
+
+def _report_header(report: "MarketReport") -> str:
+    label = "Post Market Report" if report.market_closed else "Pre Market Report"
+    return f"{label}: {report.session_date.strftime('%Y-%m-%d')}"
 
 
 def _market_structure_line(
@@ -563,9 +593,7 @@ def format_report(report: MarketReport) -> str:
     strongest_sector = _strongest_sector(report.sector_moves)
     if report.market_closed and opening_line.startswith("Market closed — showing last close"):
         opening_line = _determine_summary(report.indices)
-    lines = [
-        f"Session (IST): {report.session_date.strftime('%Y-%m-%d')}",
-    ]
+    lines = [_report_header(report)]
 
     if report.warning:
         lines.append(report.warning)
