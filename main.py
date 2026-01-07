@@ -39,7 +39,7 @@ VIX_TICKER = "^INDIAVIX"  # INDIA VIX
 SECTOR_TICKERS: Dict[str, List[str]] = {
     "IT": ["^CNXIT"],
     "PSU Banks": ["^CNXPSUBANK"],
-    "Private Banks": ["^CNXPRIVAT", "^NIFTYPRIVAT"],
+    "Private Banks": ["^CNXPRIVAT", "^NIFTYPVTBANK"],
     "Realty": ["^CNXREALTY"],
     "FMCG": ["^CNXFMCG"],
     "Energy": ["^CNXENERGY"],
