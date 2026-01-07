@@ -355,7 +355,7 @@ def _vix_line(vix: Optional[VixSnapshot], warning: Optional[str]) -> str:
 
 
 def _report_header(report: "MarketReport") -> str:
-    label = "Post Market Report" if report.market_closed else "Pre Market Report"
+    label = "Post Market Report" if report.market_closed else "Post Market Report"
     return f"{label}: {report.session_date.strftime('%Y-%m-%d')}"
 
 
