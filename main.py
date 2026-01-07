@@ -148,6 +148,13 @@ def _format_change(value: float) -> str:
     return f"{value:+,.2f}"
 
 
+def _write_report_to_temp_file(session_date: date, report_text: str) -> Path:
+    filename = f"Market_Report_{session_date.strftime('%Y-%m-%d')}.txt"
+    temp_path = Path(tempfile.gettempdir()) / filename
+    temp_path.write_text(report_text, encoding="utf-8")
+    return temp_path
+
+
 def _breadth_read_line(breadth: BreadthSnapshot) -> str:
     adv = breadth.advances
     dec = breadth.declines
@@ -1114,17 +1121,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     loading_message = await update.message.reply_text("Fetching the latest market report...")
+    temp_report_path: Optional[Path] = None
 
     try:
         report = await asyncio.to_thread(fetch_market_report)
         message = format_report(report)
         await update.message.reply_text(message)
+        temp_report_path = _write_report_to_temp_file(report.session_date, message)
+        try:
+            with temp_report_path.open("rb") as report_file:
+                await update.message.reply_document(
+                    report_file,
+                    filename=temp_report_path.name,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logging.exception("Failed to send report document", exc_info=exc)
     except Exception as exc:  # noqa: BLE001
         logging.exception("Failed to build market report", exc_info=exc)
         await update.message.reply_text(
             "Sorry, I couldn't fetch the market data right now. Please try again shortly."
         )
     finally:
+        if temp_report_path:
+            try:
+                temp_report_path.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                logging.warning("Failed to remove temp report file: %s", temp_report_path)
         try:
             await loading_message.delete()
         except Exception:  # noqa: BLE001
