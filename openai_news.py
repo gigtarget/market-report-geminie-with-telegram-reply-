@@ -14,8 +14,9 @@ You are writing a post-market news section for Indian equity traders.
 Anchor the window to the Indian market session: from the last market close (IST) to now ({now_ist} IST).
 Using web search, return exactly 5 non-redundant items from this window.
 Prefer items that impacted today’s session movers/sectors.
-Each bullet must be one line: “WHAT happened — WHY it matters”.
-No predictions, no hype, no generic filler. Exclude creator/compliance/education/distribution stories unless they visibly moved indices or a sector/stock. No URLs, no citations.
+Each bullet must be one line: “WHAT happened — WHY it matters (Source)”.
+Every bullet must end with a short source tag in parentheses like (Reuters), (Moneycontrol), (Economic Times), (Bloomberg).
+No predictions, no hype, no generic filler. Exclude creator/compliance/education/distribution stories unless they visibly moved indices or a sector/stock. No URLs. If a macro claim is included, it must be tied to the cited source tag.
 """
 
 
