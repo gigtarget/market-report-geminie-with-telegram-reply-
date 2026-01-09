@@ -1,14 +1,14 @@
 import asyncio
 import fcntl
+import io
 import logging
 import os
 import tempfile
 from datetime import date
-from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from telegram import Update
+from telegram import InputFile, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from market_data import latest_session_date
@@ -21,13 +21,7 @@ IST = ZoneInfo("Asia/Kolkata")
 _POLLING_STARTED = False
 _POLLING_LOCK_HANDLE = None
 _POLLING_LOCK_PATH = os.path.join(tempfile.gettempdir(), "telegram_bot_poller.lock")
-
-
-def _write_report_to_temp_file(session_date: date, report_text: str) -> Path:
-    filename = f"Market_Report_{session_date.strftime('%Y-%m-%d')}.txt"
-    temp_path = Path(tempfile.gettempdir()) / filename
-    temp_path.write_text(report_text, encoding="utf-8")
-    return temp_path
+TELEGRAM_TEXT_LIMIT = 3500
 
 
 def _acquire_polling_lock() -> Optional[str]:
@@ -83,32 +77,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     loading_message = await update.message.reply_text("Fetching the latest market report...")
-    temp_report_path: Optional[Path] = None
 
     try:
         report = await asyncio.to_thread(fetch_market_report)
         message = format_report(report)
-        await update.message.reply_text(message)
-        temp_report_path = _write_report_to_temp_file(report.session_date, message)
-        try:
-            with temp_report_path.open("rb") as report_file:
+        if len(message) <= TELEGRAM_TEXT_LIMIT:
+            await update.message.reply_text(message)
+        else:
+            filename = f"market_report_{report.session_date.strftime('%Y%m%d')}.txt"
+            buffer = io.BytesIO(message.encode("utf-8"))
+            buffer.seek(0)
+            try:
                 await update.message.reply_document(
-                    report_file,
-                    filename=temp_report_path.name,
+                    InputFile(buffer, filename=filename),
+                    caption="Full market report (auto-attached due to length)",
                 )
-        except Exception as exc:  # noqa: BLE001
-            logging.exception("Failed to send report document", exc_info=exc)
+            except Exception as exc:  # noqa: BLE001
+                logging.exception("Failed to send report document", exc_info=exc)
     except Exception as exc:  # noqa: BLE001
         logging.exception("Failed to build market report", exc_info=exc)
         await update.message.reply_text(
             "Sorry, I couldn't fetch the market data right now. Please try again shortly."
         )
     finally:
-        if temp_report_path:
-            try:
-                temp_report_path.unlink(missing_ok=True)
-            except Exception:  # noqa: BLE001
-                logging.warning("Failed to remove temp report file: %s", temp_report_path)
         try:
             await loading_message.delete()
         except Exception:  # noqa: BLE001
