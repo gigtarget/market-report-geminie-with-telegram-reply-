@@ -1,7 +1,6 @@
 import asyncio
 import fcntl
 import io
-import importlib.util
 import logging
 import os
 import tempfile
@@ -16,14 +15,9 @@ from report_builder import fetch_market_report
 from report_format import format_report
 from templates import initialize_templates_store
 
-if importlib.util.find_spec("zoneinfo"):
-    from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo
 
-    IST = ZoneInfo("Asia/Kolkata")
-else:  # pragma: no cover - fallback for older Python
-    import pytz
-
-    IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")
 
 _POLLING_STARTED = False
 _POLLING_LOCK_HANDLE = None
@@ -127,6 +121,9 @@ async def _send_report(send_text, send_document) -> None:
 
 
 async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.info(
+        f"scheduled_report triggered | IST={datetime.now(IST)} | UTC={datetime.utcnow()}"
+    )
     chat_id = context.job.data.get("chat_id") if context.job and context.job.data else None
     if not chat_id:
         logging.warning("Scheduled report skipped because chat_id is missing")
@@ -169,6 +166,7 @@ def main() -> None:
     other_pid = _acquire_polling_lock()
     pid = os.getpid()
     logging.info("Starting Telegram bot polling pid=%s", pid)
+    logging.info(f"Bot started | UTC={datetime.utcnow()} | IST={datetime.now(IST)}")
     if other_pid:
         logging.warning(
             "Detected possible concurrent Telegram poller pid=%s lock_path=%s",
@@ -193,21 +191,22 @@ def main() -> None:
 
     report_chat_id = os.getenv("TELEGRAM_REPORT_CHAT_ID")
     if report_chat_id:
+        report_chat_id = str(report_chat_id)
         job = application.job_queue.run_daily(
             scheduled_report,
-            time=time(8, 40, tzinfo=IST),
+            time=time(9, 5, tzinfo=IST),
             data={"chat_id": report_chat_id},
             name="daily_market_report",
         )
         logging.info(
-            "Daily market report scheduled for 08:40 IST to chat_id=%s",
+            "Daily market report scheduled for 09:05 IST to chat_id=%s",
             report_chat_id,
         )
         if job and job.next_t:
             next_run = job.next_t.astimezone(IST)
             logging.info("Next scheduled run at %s IST", next_run.strftime("%Y-%m-%d %H:%M"))
     else:
-        logging.warning(
+        logging.error(
             "TELEGRAM_REPORT_CHAT_ID not set; daily market report will not be scheduled. "
             "Send /chatid in the target chat to get the id and set it in Railway Variables."
         )
