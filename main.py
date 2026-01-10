@@ -8,16 +8,16 @@ from datetime import date, datetime, time, timezone
 from typing import Optional
 
 from telegram import InputFile, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, Defaults
 
 from market_data import latest_session_date
 from report_builder import fetch_market_report
 from report_format import format_report
 from templates import initialize_templates_store
 
-from zoneinfo import ZoneInfo
+import pytz
 
-IST = ZoneInfo("Asia/Kolkata")
+IST = pytz.timezone("Asia/Kolkata")
 
 _POLLING_STARTED = False
 _POLLING_LOCK_HANDLE = None
@@ -122,9 +122,9 @@ async def _send_report(send_text, send_document) -> None:
 
 async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.info(
-        "scheduled_report fired | IST=%s | UTC=%s",
+        "scheduled_report fired | UTC=%s | IST=%s",
+        datetime.now(timezone.utc).isoformat(),
         datetime.now(IST).isoformat(),
-        datetime.utcnow().isoformat(),
     )
     chat_id = context.job.data.get("chat_id") if context.job and context.job.data else None
     if not chat_id:
@@ -168,7 +168,11 @@ def main() -> None:
     other_pid = _acquire_polling_lock()
     pid = os.getpid()
     logging.info("Starting Telegram bot polling pid=%s", pid)
-    logging.info(f"Bot started | UTC={datetime.utcnow()} | IST={datetime.now(IST)}")
+    logging.info(
+        "Bot started | UTC=%s | IST=%s",
+        datetime.now(timezone.utc).isoformat(),
+        datetime.now(IST).isoformat(),
+    )
     if other_pid:
         logging.warning(
             "Detected possible concurrent Telegram poller pid=%s lock_path=%s",
@@ -178,7 +182,8 @@ def main() -> None:
 
     _POLLING_STARTED = True
 
-    application = Application.builder().token(token).timezone(IST).build()
+    defaults = Defaults(tzinfo=IST)
+    application = Application.builder().token(token).defaults(defaults).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("chatid", chatid_command))
@@ -186,42 +191,37 @@ def main() -> None:
     logging.info(
         "Scheduler timezone set | IST=%s | UTC=%s",
         datetime.now(IST).isoformat(),
-        datetime.utcnow().isoformat(),
+        datetime.now(timezone.utc).isoformat(),
     )
 
     raw_report_chat_id = os.getenv("TELEGRAM_REPORT_CHAT_ID")
-    report_chat_id = raw_report_chat_id
-    if report_chat_id:
-        try:
-            report_chat_id = int(report_chat_id)
-        except ValueError:
-            logging.error(
-                "TELEGRAM_REPORT_CHAT_ID must be a numeric chat_id; daily schedule disabled"
-            )
-            report_chat_id = None
+    try:
+        report_chat_id = int(raw_report_chat_id) if raw_report_chat_id else None
+    except ValueError:
+        report_chat_id = None
 
-    if report_chat_id:
-        job = application.job_queue.run_daily(
-            scheduled_report,
-            time=time(9, 5),
-            data={"chat_id": report_chat_id},
-            name="daily_market_report",
-        )
-        logging.info("Daily market report scheduled for 09:05 IST to chat_id=%s", report_chat_id)
-        if job and getattr(job, "next_t", None):
-            next_run = job.next_t.astimezone(IST)
-            logging.info(
-                "Next scheduled run at %s IST", next_run.strftime("%Y-%m-%d %H:%M:%S")
-            )
-    else:
+    if report_chat_id is None:
         if raw_report_chat_id:
             logging.error(
-                "Daily market report not scheduled due to invalid TELEGRAM_REPORT_CHAT_ID."
+                "TELEGRAM_REPORT_CHAT_ID must be a numeric chat_id; daily schedule disabled"
             )
         else:
             logging.error(
                 "TELEGRAM_REPORT_CHAT_ID not set; daily market report will not be scheduled. "
                 "Send /chatid in the target chat to get the id and set it in Railway Variables."
+            )
+    else:
+        job = application.job_queue.run_daily(
+            scheduled_report,
+            time=time(18, 10),
+            data={"chat_id": report_chat_id},
+            name="daily_market_report",
+        )
+        logging.info("Daily market report scheduled for 18:10 IST to chat_id=%s", report_chat_id)
+        if job and getattr(job, "next_t", None):
+            next_run = job.next_t.astimezone(IST)
+            logging.info(
+                "Next scheduled run at %s IST", next_run.strftime("%Y-%m-%d %H:%M:%S")
             )
     application.run_polling(drop_pending_updates=True)
 
