@@ -122,7 +122,9 @@ async def _send_report(send_text, send_document) -> None:
 
 async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.info(
-        f"scheduled_report triggered | IST={datetime.now(IST)} | UTC={datetime.utcnow()}"
+        "scheduled_report fired | IST=%s | UTC=%s",
+        datetime.now(IST).isoformat(),
+        datetime.utcnow().isoformat(),
     )
     chat_id = context.job.data.get("chat_id") if context.job and context.job.data else None
     if not chat_id:
@@ -174,42 +176,53 @@ def main() -> None:
             _POLLING_LOCK_PATH,
         )
 
-    now_utc = datetime.now(timezone.utc)
-    now_ist = datetime.now(IST)
-    logging.info(
-        "Startup time check: utc=%s ist=%s",
-        now_utc.strftime("%Y-%m-%d %H:%M:%S %Z"),
-        now_ist.strftime("%Y-%m-%d %H:%M:%S %Z"),
-    )
-
     _POLLING_STARTED = True
 
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).timezone(IST).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("chatid", chatid_command))
 
-    report_chat_id = os.getenv("TELEGRAM_REPORT_CHAT_ID")
+    logging.info(
+        "Scheduler timezone set | IST=%s | UTC=%s",
+        datetime.now(IST).isoformat(),
+        datetime.utcnow().isoformat(),
+    )
+
+    raw_report_chat_id = os.getenv("TELEGRAM_REPORT_CHAT_ID")
+    report_chat_id = raw_report_chat_id
     if report_chat_id:
-        report_chat_id = str(report_chat_id)
+        try:
+            report_chat_id = int(report_chat_id)
+        except ValueError:
+            logging.error(
+                "TELEGRAM_REPORT_CHAT_ID must be a numeric chat_id; daily schedule disabled"
+            )
+            report_chat_id = None
+
+    if report_chat_id:
         job = application.job_queue.run_daily(
             scheduled_report,
-            time=time(9, 5, tzinfo=IST),
+            time=time(9, 5),
             data={"chat_id": report_chat_id},
             name="daily_market_report",
         )
-        logging.info(
-            "Daily market report scheduled for 09:05 IST to chat_id=%s",
-            report_chat_id,
-        )
-        if job and job.next_t:
+        logging.info("Daily market report scheduled for 09:05 IST to chat_id=%s", report_chat_id)
+        if job and getattr(job, "next_t", None):
             next_run = job.next_t.astimezone(IST)
-            logging.info("Next scheduled run at %s IST", next_run.strftime("%Y-%m-%d %H:%M"))
+            logging.info(
+                "Next scheduled run at %s IST", next_run.strftime("%Y-%m-%d %H:%M:%S")
+            )
     else:
-        logging.error(
-            "TELEGRAM_REPORT_CHAT_ID not set; daily market report will not be scheduled. "
-            "Send /chatid in the target chat to get the id and set it in Railway Variables."
-        )
+        if raw_report_chat_id:
+            logging.error(
+                "Daily market report not scheduled due to invalid TELEGRAM_REPORT_CHAT_ID."
+            )
+        else:
+            logging.error(
+                "TELEGRAM_REPORT_CHAT_ID not set; daily market report will not be scheduled. "
+                "Send /chatid in the target chat to get the id and set it in Railway Variables."
+            )
     application.run_polling(drop_pending_updates=True)
 
 
