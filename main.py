@@ -174,7 +174,7 @@ def main() -> None:
     if report_chat_id:
         application.job_queue.run_daily(
             scheduled_report,
-            time=time(18, 0, tzinfo=IST),
+            time=time(08, 37, tzinfo=IST),
             data={"chat_id": report_chat_id},
             name="daily_market_report",
         )
