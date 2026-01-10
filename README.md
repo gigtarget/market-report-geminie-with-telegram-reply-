@@ -15,6 +15,8 @@ A production-ready Telegram bot that delivers the latest Indian market close dat
 - Python 3.11+
 - `TELEGRAM_BOT_TOKEN` environment variable set to your BotFather token.
 - `OPENAI_API_KEY` configured for news generation (Responses API with web search).
+- `TELEGRAM_REPORT_CHAT_ID` set to the numeric Telegram chat_id for the scheduled report (use `/chatid`).
+- Scheduler timezone is `Asia/Kolkata`; daily report runs at **09:05 IST**.
 
 ## Setup
 1. Install dependencies:
