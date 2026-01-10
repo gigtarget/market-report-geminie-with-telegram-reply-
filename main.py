@@ -213,7 +213,7 @@ def main() -> None:
     else:
         job = application.job_queue.run_daily(
             scheduled_report,
-            time=time(18, 10),
+            time=time(18, 30),
             data={"chat_id": report_chat_id},
             name="daily_market_report",
         )
