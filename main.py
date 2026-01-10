@@ -4,7 +4,7 @@ import io
 import logging
 import os
 import tempfile
-from datetime import date
+from datetime import date, time
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -79,21 +79,13 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     loading_message = await update.message.reply_text("Fetching the latest market report...")
 
     try:
-        report = await asyncio.to_thread(fetch_market_report)
-        message = format_report(report)
-        if len(message) <= TELEGRAM_TEXT_LIMIT:
-            await update.message.reply_text(message)
-        else:
-            filename = f"market_report_{report.session_date.strftime('%Y%m%d')}.txt"
-            buffer = io.BytesIO(message.encode("utf-8"))
-            buffer.seek(0)
-            try:
-                await update.message.reply_document(
-                    InputFile(buffer, filename=filename),
-                    caption="Full market report (auto-attached due to length)",
-                )
-            except Exception as exc:  # noqa: BLE001
-                logging.exception("Failed to send report document", exc_info=exc)
+        await _send_report(
+            send_text=update.message.reply_text,
+            send_document=lambda buffer, filename: update.message.reply_document(
+                InputFile(buffer, filename=filename),
+                caption="Full market report (auto-attached due to length)",
+            ),
+        )
     except Exception as exc:  # noqa: BLE001
         logging.exception("Failed to build market report", exc_info=exc)
         await update.message.reply_text(
@@ -104,6 +96,41 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await loading_message.delete()
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _send_report(send_text, send_document) -> None:
+    report = await asyncio.to_thread(fetch_market_report)
+    message = format_report(report)
+    if len(message) <= TELEGRAM_TEXT_LIMIT:
+        await send_text(message)
+        return
+
+    filename = f"market_report_{report.session_date.strftime('%Y%m%d')}.txt"
+    buffer = io.BytesIO(message.encode("utf-8"))
+    buffer.seek(0)
+    try:
+        await send_document(buffer, filename)
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("Failed to send report document", exc_info=exc)
+
+
+async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = context.job.data.get("chat_id") if context.job and context.job.data else None
+    if not chat_id:
+        logging.warning("Scheduled report skipped because chat_id is missing")
+        return
+
+    try:
+        await _send_report(
+            send_text=lambda text: context.bot.send_message(chat_id=chat_id, text=text),
+            send_document=lambda buffer, filename: context.bot.send_document(
+                chat_id=chat_id,
+                document=InputFile(buffer, filename=filename),
+                caption="Full market report (auto-attached due to length)",
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("Failed to send scheduled market report", exc_info=exc)
 
 
 def main() -> None:
@@ -142,6 +169,19 @@ def main() -> None:
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("report", report_command))
+
+    report_chat_id = os.getenv("TELEGRAM_REPORT_CHAT_ID")
+    if report_chat_id:
+        application.job_queue.run_daily(
+            scheduled_report,
+            time=time(18, 0, tzinfo=IST),
+            data={"chat_id": report_chat_id},
+            name="daily_market_report",
+        )
+    else:
+        logging.warning(
+            "TELEGRAM_REPORT_CHAT_ID not set; daily market report will not be scheduled"
+        )
     application.run_polling(drop_pending_updates=True)
 
 
