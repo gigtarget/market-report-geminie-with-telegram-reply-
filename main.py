@@ -6,6 +6,7 @@ import os
 import tempfile
 from datetime import date, datetime, time, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from telegram import InputFile, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, Defaults
@@ -15,9 +16,7 @@ from report_builder import fetch_market_report
 from report_format import format_report
 from templates import initialize_templates_store
 
-import pytz
-
-IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")
 
 _POLLING_STARTED = False
 _POLLING_LOCK_HANDLE = None
@@ -210,19 +209,23 @@ def main() -> None:
                 "TELEGRAM_REPORT_CHAT_ID not set; daily market report will not be scheduled. "
                 "Send /chatid in the target chat to get the id and set it in Railway Variables."
             )
-    else:
-        job = application.job_queue.run_daily(
+
+    job_queue = application.job_queue
+    if job_queue is None:
+        logging.error(
+            "JobQueue unavailable. Install python-telegram-bot[job-queue]. "
+            "Daily schedule disabled; /report still works."
+        )
+    elif report_chat_id is not None:
+        job_queue.run_daily(
             scheduled_report,
-            time=time(18, 23),
+            time=time(18, 40),
             data={"chat_id": report_chat_id},
             name="daily_market_report",
         )
-        logging.info("Daily market report scheduled for 18:10 IST to chat_id=%s", report_chat_id)
-        if job and getattr(job, "next_t", None):
-            next_run = job.next_t.astimezone(IST)
-            logging.info(
-                "Next scheduled run at %s IST", next_run.strftime("%Y-%m-%d %H:%M:%S")
-            )
+        logging.info(
+            "Scheduled daily report at 18:40 IST for chat_id=%s", report_chat_id
+        )
     application.run_polling(drop_pending_updates=True)
 
 
