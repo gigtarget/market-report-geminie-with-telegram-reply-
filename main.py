@@ -1,12 +1,12 @@
 import asyncio
 import fcntl
 import io
+import importlib.util
 import logging
 import os
 import tempfile
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 from telegram import InputFile, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -16,7 +16,14 @@ from report_builder import fetch_market_report
 from report_format import format_report
 from templates import initialize_templates_store
 
-IST = ZoneInfo("Asia/Kolkata")
+if importlib.util.find_spec("zoneinfo"):
+    from zoneinfo import ZoneInfo
+
+    IST = ZoneInfo("Asia/Kolkata")
+else:  # pragma: no cover - fallback for older Python
+    import pytz
+
+    IST = pytz.timezone("Asia/Kolkata")
 
 _POLLING_STARTED = False
 _POLLING_LOCK_HANDLE = None
@@ -98,6 +105,11 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pass
 
 
+async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    await update.message.reply_text(f"chat_id: {chat.id}")
+
+
 async def _send_report(send_text, send_document) -> None:
     report = await asyncio.to_thread(fetch_market_report)
     message = format_report(report)
@@ -164,23 +176,40 @@ def main() -> None:
             _POLLING_LOCK_PATH,
         )
 
+    now_utc = datetime.now(timezone.utc)
+    now_ist = datetime.now(IST)
+    logging.info(
+        "Startup time check: utc=%s ist=%s",
+        now_utc.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        now_ist.strftime("%Y-%m-%d %H:%M:%S %Z"),
+    )
+
     _POLLING_STARTED = True
 
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("report", report_command))
+    application.add_handler(CommandHandler("chatid", chatid_command))
 
     report_chat_id = os.getenv("TELEGRAM_REPORT_CHAT_ID")
     if report_chat_id:
-        application.job_queue.run_daily(
+        job = application.job_queue.run_daily(
             scheduled_report,
             time=time(8, 40, tzinfo=IST),
             data={"chat_id": report_chat_id},
             name="daily_market_report",
         )
+        logging.info(
+            "Daily market report scheduled for 08:40 IST to chat_id=%s",
+            report_chat_id,
+        )
+        if job and job.next_t:
+            next_run = job.next_t.astimezone(IST)
+            logging.info("Next scheduled run at %s IST", next_run.strftime("%Y-%m-%d %H:%M"))
     else:
         logging.warning(
-            "TELEGRAM_REPORT_CHAT_ID not set; daily market report will not be scheduled"
+            "TELEGRAM_REPORT_CHAT_ID not set; daily market report will not be scheduled. "
+            "Send /chatid in the target chat to get the id and set it in Railway Variables."
         )
     application.run_polling(drop_pending_updates=True)
 
