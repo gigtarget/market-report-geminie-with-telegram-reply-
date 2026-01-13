@@ -147,7 +147,7 @@ _REPORT_CACHE: Dict[str, Optional[object]] = {"report": None, "timestamp": None}
 
 
 def _format_number(value: float) -> str:
-    return f"{value:,.2f}"
+    return f"{value:,.0f}"
 
 
 def _normalize_sector_key(value: str) -> str:
@@ -473,7 +473,7 @@ def _build_drivers(report: MarketReport, weakest_sector: Optional[str]) -> List[
     if report.bottom_performers:
         laggard = sorted(report.bottom_performers, key=lambda item: item.percent_change)[0]
         drivers.append(
-            f"Stock drag: {laggard.symbol} led the downside ({laggard.percent_change:+.2f}%)."
+            f"Stock drag: {laggard.symbol} led the downside ({laggard.percent_change:+.0f}%)."
         )
 
     if report.fii_dii and report.fii_dii.fii:

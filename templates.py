@@ -66,7 +66,7 @@ class _SafeDict(dict):
 
 
 def _format_pct(value: float) -> str:
-    return f"{value:+.2f}%"
+    return f"{value:+.0f}%"
 
 
 def _build_placeholder_values(

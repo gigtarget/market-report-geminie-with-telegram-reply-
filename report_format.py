@@ -8,17 +8,17 @@ from templates import classify_market, get_opening_line
 
 
 def _format_number(value: float) -> str:
-    return f"{value:,.2f}"
+    return f"{value:,.0f}"
 
 
 def _format_change(value: float) -> str:
-    return f"{value:+,.2f}"
+    return f"{value:+,.0f}"
 
 
 def _format_index_move(name: str, snapshot) -> str:
     direction = "up" if snapshot.percent_change > 0 else "down" if snapshot.percent_change < 0 else "flat"
     return (
-        f"{name} {direction} {abs(snapshot.percent_change):.2f}% to {_format_number(snapshot.close)}"
+        f"{name} {direction} {abs(snapshot.percent_change):.0f}% to {_format_number(snapshot.close)}"
     )
 
 
@@ -30,7 +30,7 @@ def _breadth_read(breadth: BreadthSnapshot) -> str:
         ratio = float("inf")
     else:
         ratio = adv / dec
-        ratio_display = f"{ratio:.2f}"
+        ratio_display = f"{ratio:.0f}"
 
     if ratio >= 1.25:
         label = "positive"
@@ -62,7 +62,7 @@ def _executive_takeaway(report: MarketReport) -> List[str]:
     if report.vix:
         arrow = "↑" if report.vix.percent_change > 0 else "↓" if report.vix.percent_change < 0 else "→"
         bullets.append(
-            f"VIX {arrow} {report.vix.percent_change:+.2f}% to {report.vix.value:.2f}."
+            f"VIX {arrow} {report.vix.percent_change:+.0f}% to {report.vix.value:.0f}."
         )
 
     if len(bullets) < 2:
@@ -98,7 +98,7 @@ def _risk_dashboard(report: MarketReport) -> List[str]:
     if report.vix:
         arrow = "↑" if report.vix.percent_change > 0 else "↓" if report.vix.percent_change < 0 else "→"
         lines.append(
-            f"VIX: {report.vix.value:.2f} ({arrow} {report.vix.percent_change:+.2f}%)"
+            f"VIX: {report.vix.value:.0f} ({arrow} {report.vix.percent_change:+.0f}%)"
         )
     else:
         lines.append("VIX: unavailable.")
@@ -170,8 +170,8 @@ def _indicator_block(report: MarketReport) -> List[str]:
 
     for name, indicator in report.indicators.items():
         lines.append(
-            f"{name}: RSI(14) {indicator.rsi:.1f} ({indicator.rsi_label}); "
-            f"MACD(12,26,9) {indicator.macd:.2f}/{indicator.macd_signal:.2f}/{indicator.macd_hist:.2f} "
+            f"{name}: RSI(14) {indicator.rsi:.0f} ({indicator.rsi_label}); "
+            f"MACD(12,26,9) {indicator.macd:.0f}/{indicator.macd_signal:.0f}/{indicator.macd_hist:.0f} "
             f"({indicator.macd_label}); Supertrend(10,3) {indicator.supertrend_direction} "
             f"@ {indicator.supertrend:,.0f}"
         )
@@ -215,17 +215,17 @@ def _sector_block(moves: Optional[List[SectorMove]], coverage_line: Optional[str
     weakest = _weakest_sectors(moves)
 
     if strongest:
-        lines.append(f"Top strong: {strongest.sector} ({strongest.percent_change:+.2f}%)")
+        lines.append(f"Top strong: {strongest.sector} ({strongest.percent_change:+.0f}%)")
     if weakest:
         weak_line = ", ".join(
-            f"{item.sector} ({item.percent_change:+.2f}%)" for item in weakest
+            f"{item.sector} ({item.percent_change:+.0f}%)" for item in weakest
         )
         lines.append(f"Top weak: {weak_line}")
 
     if len(moves) <= 10:
         lines.append("Sector Moves (%):")
         for move in moves:
-            lines.append(f"• {move.sector}: {move.percent_change:+.2f}%")
+            lines.append(f"• {move.sector}: {move.percent_change:+.0f}%")
 
     return lines
 
