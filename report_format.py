@@ -399,16 +399,7 @@ def format_report(report: MarketReport) -> str:
         lines.extend(["", "FII/DII (NSE):"])
 
         as_on_text = f"As on: {report.fii_dii.as_on}"
-        if (
-            report.market_closed
-            and report.fii_dii.as_on_date
-            and report.fii_dii.as_on_date < report.session_date
-        ):
-            lines.append(
-                f"Market closed — showing last reported FII/DII data (As on: {report.fii_dii.as_on})"
-            )
-        else:
-            lines.append(as_on_text)
+        lines.append(as_on_text)
 
         if report.fii_dii.fii:
             lines.append(

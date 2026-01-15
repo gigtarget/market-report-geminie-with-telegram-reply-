@@ -23,7 +23,6 @@ INSERT INTO narrative_templates (name, direction, strength, leader, template_tex
 ('post_market_opening', 'mixed', 'solid', 'any', 'Cross-currents prevailed; {leader_name} held relative strength.', 1),
 ('post_market_opening', 'flat', 'any', 'any', 'Flat finish with little separation among the majors.', 0),
 ('post_market_opening', 'flat', 'mild', 'any', 'Sideways close; {leader_name} barely budged.', 0),
-('post_market_opening', 'closed', 'any', 'any', 'Market closed — showing last close for {session_date}.', 0),
 ('post_market_opening', 'flat', 'solid', 'any', 'Tight range day; traders marked time into the close.', 0),
 ('post_market_opening', 'mixed', 'strong', 'any', 'Volatile swings ended mixed with {leader_name} dominating moves.', 1),
 ('post_market_opening', 'down', 'strong', 'any', 'Selling pressure broadened as {leader_name} led declines.', 1),
