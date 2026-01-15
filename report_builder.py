@@ -507,6 +507,8 @@ def _build_fresh_market_report() -> MarketReport:
     sector_moves, sector_warning = _fetch_sector_moves()
 
     fii_dii_data, fii_dii_warning = get_fii_dii_data(expected_date=report_date)
+    if fii_dii_data and fii_dii_data.as_on_date != report_date:
+        fii_dii_data = None
     top_gainers, bottom_performers, breadth, movers_warning = _fetch_top_movers()
     news_digest = _build_news_digest(now_ist)
     liveblog_highlights, liveblog_warning = build_post_market_highlights(now_ist)
