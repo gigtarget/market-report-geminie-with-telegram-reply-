@@ -395,31 +395,25 @@ def format_report(report: MarketReport) -> str:
     lines.extend(["", *(_drivers_block(report))])
     lines.extend(["", *(_movers_block(report))])
 
-    if report.fii_dii:
+    if report.fii_dii and report.fii_dii.fii and report.fii_dii.dii:
         lines.extend(["", "FII/DII (NSE):"])
 
         as_on_text = f"As on: {report.fii_dii.as_on}"
         lines.append(as_on_text)
 
-        if report.fii_dii.fii:
-            lines.append(
-                "FII "
-                f"Buy: {_format_number(report.fii_dii.fii.buy)} | "
-                f"Sell: {_format_number(report.fii_dii.fii.sell)} | "
-                f"Net: {_format_number(report.fii_dii.fii.net)}"
-            )
-        else:
-            lines.append("FII data unavailable")
+        lines.append(
+            "FII "
+            f"Buy: {_format_number(report.fii_dii.fii.buy)} | "
+            f"Sell: {_format_number(report.fii_dii.fii.sell)} | "
+            f"Net: {_format_number(report.fii_dii.fii.net)}"
+        )
 
-        if report.fii_dii.dii:
-            lines.append(
-                "DII "
-                f"Buy: {_format_number(report.fii_dii.dii.buy)} | "
-                f"Sell: {_format_number(report.fii_dii.dii.sell)} | "
-                f"Net: {_format_number(report.fii_dii.dii.net)}"
-            )
-        else:
-            lines.append("DII data unavailable")
+        lines.append(
+            "DII "
+            f"Buy: {_format_number(report.fii_dii.dii.buy)} | "
+            f"Sell: {_format_number(report.fii_dii.dii.sell)} | "
+            f"Net: {_format_number(report.fii_dii.dii.net)}"
+        )
 
     liveblog_block = _liveblog_block(report)
     if liveblog_block:

@@ -497,8 +497,8 @@ def _build_fresh_market_report() -> MarketReport:
     report_date = max(session_dates) if session_dates else date.today()
 
     now_ist = datetime.now(tz=IST)
-    latest_ts_display = max(last_ts_candidates) if last_ts_candidates else now_ist
     today_ist = now_ist.date()
+    latest_ts_display = max(last_ts_candidates) if last_ts_candidates else now_ist
     market_closed = latest_ts_display.date() < today_ist
 
     generated_at = datetime.now(timezone.utc)
@@ -506,9 +506,19 @@ def _build_fresh_market_report() -> MarketReport:
     vix_snapshot, vix_warning = _fetch_vix_snapshot()
     sector_moves, sector_warning = _fetch_sector_moves()
 
-    fii_dii_data, fii_dii_warning = get_fii_dii_data(expected_date=report_date)
-    if fii_dii_data and fii_dii_data.as_on_date != report_date:
-        fii_dii_data = None
+    fii_dii_data, fii_dii_warning = get_fii_dii_data(expected_date=today_ist)
+    if fii_dii_data:
+        if fii_dii_data.as_on_date != today_ist:
+            logging.info(
+                "Skipping FII/DII block: as on date %s does not match IST date %s",
+                fii_dii_data.as_on_date,
+                today_ist,
+            )
+            fii_dii_data = None
+            fii_dii_warning = None
+        elif fii_dii_data.fii is None or fii_dii_data.dii is None:
+            fii_dii_data = None
+            fii_dii_warning = None
     top_gainers, bottom_performers, breadth, movers_warning = _fetch_top_movers()
     news_digest = _build_news_digest(now_ist)
     liveblog_highlights, liveblog_warning = build_post_market_highlights(now_ist)
