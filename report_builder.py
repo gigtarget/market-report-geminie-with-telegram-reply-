@@ -178,8 +178,6 @@ def _fetch_sector_moves() -> Tuple[Optional[List[SectorMove]], Optional[str]]:
     expected_sectors = list(SECTOR_TICKERS.keys())
     normalized_expected = {_normalize_sector_key(name): name for name in expected_sectors}
     sector_returns: Dict[str, Optional[float]] = {name: None for name in expected_sectors}
-    missing: List[str] = []
-
     for sector, tickers in SECTOR_TICKERS.items():
         display_name = normalized_expected.get(_normalize_sector_key(sector), sector)
         percent_change: Optional[float] = None
@@ -197,7 +195,6 @@ def _fetch_sector_moves() -> Tuple[Optional[List[SectorMove]], Optional[str]]:
                 logging.warning("Sector fetch failed for %s (%s): %s", sector, ticker, exc)
 
         if percent_change is None or not math.isfinite(percent_change):
-            missing.append(display_name)
             sector_returns[display_name] = None
         else:
             sector_returns[display_name] = percent_change
@@ -208,20 +205,11 @@ def _fetch_sector_moves() -> Tuple[Optional[List[SectorMove]], Optional[str]]:
         if percent_change is not None and math.isfinite(percent_change)
     ]
 
-    total = len(expected_sectors)
-    coverage_count = sum(
-        1 for percent_change in sector_returns.values()
-        if percent_change is not None and math.isfinite(percent_change)
-    )
-    coverage_line = f"Sector coverage: {coverage_count}/{total}"
-    if missing:
-        coverage_line += f" | Sector index unavailable: {', '.join(missing)}"
-
     if not moves:
-        return None, coverage_line
+        return None, None
 
     moves.sort(key=lambda item: item.percent_change, reverse=True)
-    return moves, coverage_line
+    return moves, None
 
 
 def _load_nifty_100_tickers() -> Tuple[List[str], Optional[str]]:
@@ -373,13 +361,6 @@ def _build_news_digest(now_ist: datetime) -> NewsDigest:
         return NewsDigest([], "News (Top 5): Unavailable (OpenAI web search error).")
 
 
-def _round_level(index_name: str, value: float) -> float:
-    base = 50
-    if index_name in ("Nifty Bank", "Sensex"):
-        base = 100
-    return round(value / base) * base
-
-
 def _compute_pivot_levels(name: str, history_df, market_closed: bool) -> Optional[KeyLevels]:
     try:
         clean = history_df.dropna(subset=["High", "Low", "Close"])
@@ -410,11 +391,11 @@ def _compute_pivot_levels(name: str, history_df, market_closed: bool) -> Optiona
     return KeyLevels(
         name=name,
         method="Prev-day pivots",
-        pivot=_round_level(name, pivot),
-        r1=_round_level(name, r1),
-        s1=_round_level(name, s1),
-        r2=_round_level(name, r2),
-        s2=_round_level(name, s2),
+        pivot=pivot,
+        r1=r1,
+        s1=s1,
+        r2=r2,
+        s2=s2,
     )
 
 
@@ -525,7 +506,7 @@ def _build_fresh_market_report() -> MarketReport:
     vix_snapshot, vix_warning = _fetch_vix_snapshot()
     sector_moves, sector_warning = _fetch_sector_moves()
 
-    fii_dii_data, fii_dii_warning = get_fii_dii_data()
+    fii_dii_data, fii_dii_warning = get_fii_dii_data(expected_date=report_date)
     top_gainers, bottom_performers, breadth, movers_warning = _fetch_top_movers()
     news_digest = _build_news_digest(now_ist)
     liveblog_highlights, liveblog_warning = build_post_market_highlights(now_ist)

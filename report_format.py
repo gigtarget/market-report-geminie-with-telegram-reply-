@@ -15,10 +15,18 @@ def _format_change(value: float) -> str:
     return f"{value:+,.0f}"
 
 
+def _format_percent(value: float) -> str:
+    return f"{value:+.2f}"
+
+
+def _format_percent_plain(value: float) -> str:
+    return f"{value:.2f}"
+
+
 def _format_index_move(name: str, snapshot) -> str:
     direction = "up" if snapshot.percent_change > 0 else "down" if snapshot.percent_change < 0 else "flat"
     return (
-        f"{name} {direction} {abs(snapshot.percent_change):.0f}% to {_format_number(snapshot.close)}"
+        f"{name} {direction} {_format_percent_plain(abs(snapshot.percent_change))}% to {_format_number(snapshot.close)}"
     )
 
 
@@ -90,10 +98,6 @@ def _risk_dashboard(report: MarketReport) -> List[str]:
         lines.append(
             f"Flows: FII net {_format_number(float(fii_net))} | DII net {_format_number(float(dii_net))}"
         )
-    elif report.fii_dii_warning:
-        lines.append(f"Flows: {report.fii_dii_warning}")
-    else:
-        lines.append("Flows: unavailable.")
 
     if report.vix:
         arrow = "↑" if report.vix.percent_change > 0 else "↓" if report.vix.percent_change < 0 else "→"
@@ -115,8 +119,8 @@ def _key_levels_block(report: MarketReport) -> List[str]:
             levels = report.key_levels.get(key)
             if levels:
                 lines.append(
-                    f"{levels.name}: S1 {levels.s1:,.0f} | Pivot {levels.pivot:,.0f} | "
-                    f"R1 {levels.r1:,.0f} | S2 {levels.s2:,.0f} | R2 {levels.r2:,.0f}"
+                    f"{levels.name}: S1 {levels.s1:,.2f} | Pivot {levels.pivot:,.2f} | "
+                    f"R1 {levels.r1:,.2f} | S2 {levels.s2:,.2f} | R2 {levels.r2:,.2f}"
                 )
                 printed_any = True
 
@@ -124,8 +128,8 @@ def _key_levels_block(report: MarketReport) -> List[str]:
             if name in {"Nifty 50", "Nifty Bank", "Sensex"}:
                 continue
             lines.append(
-                f"{levels.name}: S1 {levels.s1:,.0f} | Pivot {levels.pivot:,.0f} | "
-                f"R1 {levels.r1:,.0f} | S2 {levels.s2:,.0f} | R2 {levels.r2:,.0f}"
+                f"{levels.name}: S1 {levels.s1:,.2f} | Pivot {levels.pivot:,.2f} | "
+                f"R1 {levels.r1:,.2f} | S2 {levels.s2:,.2f} | R2 {levels.r2:,.2f}"
             )
             printed_any = True
 
@@ -140,19 +144,19 @@ def _key_levels_block(report: MarketReport) -> List[str]:
     if nifty_levels and nifty_close is not None:
         if nifty_close < nifty_levels.s2:
             pivot_line = (
-                f"Close vs Pivot: Nifty 50 closed below S2 (~{nifty_levels.s2:,.0f}) and "
-                f"Pivot (~{nifty_levels.pivot:,.0f}) → downside bias; reclaim S1/Pivot to neutralize."
+                f"Close vs Pivot: Nifty 50 closed below S2 (~{nifty_levels.s2:,.2f}) and "
+                f"Pivot (~{nifty_levels.pivot:,.2f}) → downside bias; reclaim S1/Pivot to neutralize."
             )
         elif nifty_close < nifty_levels.s1:
             pivot_line = (
-                f"Close vs Pivot: Nifty 50 closed below S1 (~{nifty_levels.s1:,.0f}) and "
-                f"Pivot (~{nifty_levels.pivot:,.0f}) → cautious bias until reclaimed."
+                f"Close vs Pivot: Nifty 50 closed below S1 (~{nifty_levels.s1:,.2f}) and "
+                f"Pivot (~{nifty_levels.pivot:,.2f}) → cautious bias until reclaimed."
             )
         else:
             position = "above" if nifty_close >= nifty_levels.pivot else "below"
             bias = "constructive bias" if position == "above" else "cautious bias until reclaimed"
             pivot_line = (
-                f"Close vs Pivot: Nifty 50 closed {position} Pivot (~{nifty_levels.pivot:,.0f})"
+                f"Close vs Pivot: Nifty 50 closed {position} Pivot (~{nifty_levels.pivot:,.2f})"
                 f" → {bias}."
             )
     else:
@@ -184,7 +188,7 @@ def _indices_snapshot(report: MarketReport) -> List[str]:
     for idx in report.indices:
         lines.append(
             f"{idx.name}: {_format_number(idx.close)} "
-            f"({_format_change(idx.change)} | {_format_change(idx.percent_change)}%)"
+            f"({_format_change(idx.change)} | {_format_percent(idx.percent_change)}%)"
         )
     return lines
 
@@ -202,14 +206,10 @@ def _weakest_sectors(moves: Optional[List[SectorMove]], count: int = 3) -> List[
 
 
 def _sector_block(moves: Optional[List[SectorMove]], coverage_line: Optional[str]) -> List[str]:
-    lines: List[str] = ["Sectors:"]
-
-    if coverage_line:
-        lines.append(coverage_line)
-
     if not moves:
-        lines.append("Sector data unavailable.")
-        return lines
+        return []
+
+    lines: List[str] = ["Sectors:"]
 
     strongest = _strongest_sector(moves)
     weakest = _weakest_sectors(moves)
@@ -301,23 +301,23 @@ def _tomorrows_focus(report: MarketReport) -> List[str]:
     def _levels_rule(name: str, levels: KeyLevels, close_value: Optional[float]) -> str:
         if close_value is None:
             return (
-                f"{name} rule: Hold Pivot (~{levels.pivot:,.0f}) to open R1 (~{levels.r1:,.0f}); "
-                f"below Pivot → watch S1 (~{levels.s1:,.0f})."
+                f"{name} rule: Hold Pivot (~{levels.pivot:,.2f}) to open R1 (~{levels.r1:,.2f}); "
+                f"below Pivot → watch S1 (~{levels.s1:,.2f})."
             )
         if close_value < levels.s2:
             return (
-                f"{name} rule: Below S2 (~{levels.s2:,.0f}) → downside risk active; reclaim "
-                f"S1 (~{levels.s1:,.0f}) + Pivot (~{levels.pivot:,.0f}) for relief; above Pivot → "
-                f"R1 (~{levels.r1:,.0f})."
+                f"{name} rule: Below S2 (~{levels.s2:,.2f}) → downside risk active; reclaim "
+                f"S1 (~{levels.s1:,.2f}) + Pivot (~{levels.pivot:,.2f}) for relief; above Pivot → "
+                f"R1 (~{levels.r1:,.2f})."
             )
         if close_value < levels.s1:
             return (
-                f"{name} rule: Below S1 (~{levels.s1:,.0f}) → watch S2 (~{levels.s2:,.0f}); "
-                f"reclaim Pivot (~{levels.pivot:,.0f}) → R1 (~{levels.r1:,.0f})."
+                f"{name} rule: Below S1 (~{levels.s1:,.2f}) → watch S2 (~{levels.s2:,.2f}); "
+                f"reclaim Pivot (~{levels.pivot:,.2f}) → R1 (~{levels.r1:,.2f})."
             )
         return (
-            f"{name} rule: Hold Pivot (~{levels.pivot:,.0f}) → aim R1 (~{levels.r1:,.0f}); "
-            f"below Pivot → watch S1 (~{levels.s1:,.0f})."
+            f"{name} rule: Hold Pivot (~{levels.pivot:,.2f}) → aim R1 (~{levels.r1:,.2f}); "
+            f"below Pivot → watch S1 (~{levels.s1:,.2f})."
         )
 
     if report.key_levels:
@@ -389,48 +389,46 @@ def format_report(report: MarketReport) -> str:
     lines.extend(["", *(_key_levels_block(report))])
     lines.extend(["", *(_indicator_block(report))])
     lines.extend(["", *(_indices_snapshot(report))])
-    lines.extend(["", *(_sector_block(report.sector_moves, report.sector_warning))])
+    sector_block = _sector_block(report.sector_moves, report.sector_warning)
+    if sector_block:
+        lines.extend(["", *sector_block])
     lines.extend(["", *(_drivers_block(report))])
     lines.extend(["", *(_movers_block(report))])
 
-    if report.fii_dii or report.fii_dii_warning:
+    if report.fii_dii:
         lines.extend(["", "FII/DII (NSE):"])
 
-        if report.fii_dii_warning:
-            lines.append(report.fii_dii_warning)
+        as_on_text = f"As on: {report.fii_dii.as_on}"
+        if (
+            report.market_closed
+            and report.fii_dii.as_on_date
+            and report.fii_dii.as_on_date < report.session_date
+        ):
+            lines.append(
+                f"Market closed — showing last reported FII/DII data (As on: {report.fii_dii.as_on})"
+            )
+        else:
+            lines.append(as_on_text)
 
-        if report.fii_dii:
-            as_on_text = f"As on: {report.fii_dii.as_on}"
-            if (
-                report.market_closed
-                and report.fii_dii.as_on_date
-                and report.fii_dii.as_on_date < report.session_date
-            ):
-                lines.append(
-                    f"Market closed — showing last reported FII/DII data (As on: {report.fii_dii.as_on})"
-                )
-            else:
-                lines.append(as_on_text)
+        if report.fii_dii.fii:
+            lines.append(
+                "FII "
+                f"Buy: {_format_number(report.fii_dii.fii.buy)} | "
+                f"Sell: {_format_number(report.fii_dii.fii.sell)} | "
+                f"Net: {_format_number(report.fii_dii.fii.net)}"
+            )
+        else:
+            lines.append("FII data unavailable")
 
-            if report.fii_dii.fii:
-                lines.append(
-                    "FII "
-                    f"Buy: {_format_number(report.fii_dii.fii.buy)} | "
-                    f"Sell: {_format_number(report.fii_dii.fii.sell)} | "
-                    f"Net: {_format_number(report.fii_dii.fii.net)}"
-                )
-            else:
-                lines.append("FII data unavailable")
-
-            if report.fii_dii.dii:
-                lines.append(
-                    "DII "
-                    f"Buy: {_format_number(report.fii_dii.dii.buy)} | "
-                    f"Sell: {_format_number(report.fii_dii.dii.sell)} | "
-                    f"Net: {_format_number(report.fii_dii.dii.net)}"
-                )
-            else:
-                lines.append("DII data unavailable")
+        if report.fii_dii.dii:
+            lines.append(
+                "DII "
+                f"Buy: {_format_number(report.fii_dii.dii.buy)} | "
+                f"Sell: {_format_number(report.fii_dii.dii.sell)} | "
+                f"Net: {_format_number(report.fii_dii.dii.net)}"
+            )
+        else:
+            lines.append("DII data unavailable")
 
     liveblog_block = _liveblog_block(report)
     if liveblog_block:

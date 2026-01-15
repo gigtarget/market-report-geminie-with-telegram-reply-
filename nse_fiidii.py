@@ -388,16 +388,14 @@ def _get_cached() -> Optional[FiiDiiData]:
     return None
 
 
-def get_fii_dii_data() -> Tuple[Optional[FiiDiiData], Optional[str]]:
-    cached = _get_cached()
+def get_fii_dii_data(expected_date: Optional[date] = None) -> Tuple[Optional[FiiDiiData], Optional[str]]:
     try:
         data = _fetch_fresh_data()
+        if expected_date and (data.as_on_date is None or data.as_on_date != expected_date):
+            return None, None
         _CACHE["data"] = data
         _CACHE["timestamp"] = datetime.utcnow()
         return data, None
     except Exception as exc:  # noqa: BLE001
         logging.exception("Failed to fetch NSE FII/DII data", exc_info=exc)
-        if cached:
-            cached.from_cache = True
-            return cached, "Using cached FII/DII due to upstream failure"
-        return None, "FII/DII unavailable (NSE blocked/upstream error)"
+        return None, None
