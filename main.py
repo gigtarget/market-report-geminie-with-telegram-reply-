@@ -83,7 +83,7 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             send_text=update.message.reply_text,
             send_document=lambda buffer, filename: update.message.reply_document(
                 InputFile(buffer, filename=filename),
-                caption="Full market report (auto-attached due to length)",
+                caption="Full market report (text file attached)",
             ),
         )
     except Exception as exc:  # noqa: BLE001
@@ -108,8 +108,6 @@ async def _send_report(send_text, send_document) -> None:
     message = format_report(report)
     if len(message) <= TELEGRAM_TEXT_LIMIT:
         await send_text(message)
-        return
-
     filename = f"market_report_{report.session_date.strftime('%Y%m%d')}.txt"
     buffer = io.BytesIO(message.encode("utf-8"))
     buffer.seek(0)
@@ -136,7 +134,7 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
             send_document=lambda buffer, filename: context.bot.send_document(
                 chat_id=chat_id,
                 document=InputFile(buffer, filename=filename),
-                caption="Full market report (auto-attached due to length)",
+                caption="Full market report (text file attached)",
             ),
         )
     except Exception as exc:  # noqa: BLE001
