@@ -23,21 +23,18 @@ def classify_market(indices: Dict[str, float], market_closed: bool = False) -> T
     sensex_pct = indices.get("Sensex", 0.0)
     banknifty_pct = indices.get("Nifty Bank", 0.0)
 
-    if market_closed:
-        direction = "closed"
-    else:
-        all_positive = all(pct > 0.10 for pct in (nifty_pct, sensex_pct, banknifty_pct))
-        all_negative = all(pct < -0.10 for pct in (nifty_pct, sensex_pct, banknifty_pct))
-        all_flat = all(abs(pct) < 0.10 for pct in (nifty_pct, sensex_pct, banknifty_pct))
+    all_positive = all(pct > 0.10 for pct in (nifty_pct, sensex_pct, banknifty_pct))
+    all_negative = all(pct < -0.10 for pct in (nifty_pct, sensex_pct, banknifty_pct))
+    all_flat = all(abs(pct) < 0.10 for pct in (nifty_pct, sensex_pct, banknifty_pct))
 
-        if all_positive:
-            direction = "up"
-        elif all_negative:
-            direction = "down"
-        elif all_flat:
-            direction = "flat"
-        else:
-            direction = "mixed"
+    if all_positive:
+        direction = "up"
+    elif all_negative:
+        direction = "down"
+    elif all_flat:
+        direction = "flat"
+    else:
+        direction = "mixed"
 
     avg_strength = (abs(nifty_pct) + abs(sensex_pct) + abs(banknifty_pct)) / 3
     if avg_strength < 0.30:
