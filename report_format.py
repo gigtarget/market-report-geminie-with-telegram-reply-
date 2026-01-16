@@ -215,17 +215,17 @@ def _sector_block(moves: Optional[List[SectorMove]], coverage_line: Optional[str
     weakest = _weakest_sectors(moves)
 
     if strongest:
-        lines.append(f"Top strong: {strongest.sector} ({strongest.percent_change:+.0f}%)")
+        lines.append(f"Top strong: {strongest.sector} ({strongest.percent_change:+.2f}%)")
     if weakest:
         weak_line = ", ".join(
-            f"{item.sector} ({item.percent_change:+.0f}%)" for item in weakest
+            f"{item.sector} ({item.percent_change:+.2f}%)" for item in weakest
         )
         lines.append(f"Top weak: {weak_line}")
 
     if len(moves) <= 10:
         lines.append("Sector Moves (%):")
         for move in moves:
-            lines.append(f"• {move.sector}: {move.percent_change:+.0f}%")
+            lines.append(f"• {move.sector}: {move.percent_change:+.2f}%")
 
     return lines
 
