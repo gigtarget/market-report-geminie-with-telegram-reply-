@@ -217,7 +217,7 @@ def main() -> None:
     elif report_chat_id is not None:
         job_queue.run_daily(
             scheduled_report,
-            time=time(18, 40),
+            time=time(16, 30),
             data={"chat_id": report_chat_id},
             name="daily_market_report",
         )
